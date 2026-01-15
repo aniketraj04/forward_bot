@@ -10,15 +10,16 @@ conn = mysql.connector.connect(
 
 cursor = conn.cursor()
 
-def save_rule(user_id, source_channel, dest_channels):
+def save_rule(user_id, source, destination):
     cursor.execute(
-        "INSERT INTO rules (user_id, source_channel, dest_channels) VALUES (%s, %s, %s)",
-        (user_id, source_channel, dest_channels)
-
+        "INSERT INTO rules (user_id, source_channel, destination_channel) VALUES (%s, %s, %s)",
+        (user_id, source, destination)
     )
     conn.commit()
 
 def get_destinations(source):
     cursor.execute(
-        "SELECT destination_channel FROM rules WHERE source_channel = %s",
+        "SELECT destination_channel FROM rules WHERE source_channel=%s",
+        (source,)
     )
+    return [row[0] for row in cursor.fetchall()]
