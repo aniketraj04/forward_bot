@@ -1,7 +1,6 @@
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import State, StatesGroup
 
-class RuleFSM(StatesGroup):
-    source = State()
-    destination = State()
-    dest_count = State()
-    dest_channels = State()
+class RuleState(StatesGroup):
+    Waiting_source = State()
+    Waiting_destination = State()
+
