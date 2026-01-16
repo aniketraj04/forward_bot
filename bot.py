@@ -2,14 +2,15 @@ import asyncio
 import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = "7244754211:AAGLxPr5R73tKSTZh6KTCaOwaKr_BYdefC8"
 
-# MySQL connection
+
 db = mysql.connector.connect(
     host="localhost",
     user="root",
-    password="root",   # your password
+    password="root",   
     database="tg_bot"
 )
 cursor = db.cursor()
@@ -28,6 +29,20 @@ def save_user(user_id, first_name, username):
     )
     db.commit()
 
+#button
+
+def main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="set forwarding rules", callback_data="set_rules")]
+    ])
+
+def rules_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text= " ADD SOURCE", callback_data="add_source")],
+        [InlineKeyboardButton(text= " ADD DESTINATION", callback_data="add_destination")]
+    ])
+
+
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user = message.from_user
@@ -38,10 +53,35 @@ async def start_handler(message: types.Message):
     existing = get_user(uid)
 
     if existing:
-        await message.answer(f"wapas aagaya badhwe, {name} 😄")
+        text= f"wapas aagaya badhwe, {name} 😄"
     else:
         save_user(uid, name, username)
-        await message.answer(f"loru, {name}! teri sari infomation save karli maine.")
+        text=f"loru, {name}! teri sari infomation save karli maine."
+
+    await message.answer(
+        text + "\n\nChoose an option:",
+        reply_markup=main_menu()
+    )    
+
+
+#button handler
+@dp.callback_query()
+async def button_handler(call: types.CallbackQuery):
+    if call.data == "set_rules":
+        await call.message.answer(
+            "Now set your forwarding rules:",
+            reply_markup=rules_menu()
+        )
+
+    elif call.data == "add_source":
+        await call.message.answer("Send me the SOURCE channel ID or username.")
+
+    elif call.data == "add_destination":
+        await call.message.answer("Send me the DESTINATION channel ID or username.")
+
+    await call.answer()
+
+###########
 
 @dp.message()
 async def any_message(message: types.Message):
