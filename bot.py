@@ -31,6 +31,12 @@ def save_user(user_id, first_name, username):
     )
     db.commit()
 
+def save_rule(user_id, source_id, dest_id):
+    cursor.execute(
+        "INSERT INTO rules (user_id, source_chat_id, destination_chat_id) VALUES (%s, %s, %s)",
+        (user_id, source_id, dest_id)
+    )
+    db.commit()
 #button
 
 def main_menu():
@@ -86,43 +92,71 @@ async def button_handler(call: types.CallbackQuery, state: FSMContext):
 
 ###########
 
+#source 
 @dp.message(RuleState.Waiting_source)
 async def get_source(message: types.Message, state: FSMContext):
     channel = message.text.strip()
     try:
         chat = await bot.get_chat(channel)
-        member = await bot.get_chat_member(chat.id,bot.id)
-        print(member.status) 
-        print(type(member.status))
+        member = await bot.get_chat_member(chat.id, bot.id)
 
-        if member.status not in ["member"]:
-            await message.answer("MAke me admin and send again.")
+        if member.status not in ["administrator", "creator"]:
+            await message.answer("Make me admin and send again.")
             return        
 
         await state.update_data(source=chat.id)
-        await message.answer("source channel saved.")
-        await state.clear()
+        await message.answer("Source channel saved. Now add destination channel.")
+
 
     except:
-        await message.answer("Invalid channel hai lodu.")
+        await message.answer("Invalid channel.")
 
 
+#destination_weding 
 @dp.message(RuleState.Waiting_destination)
 async def get_destination(message: types.Message, state: FSMContext):
     channel = message.text.strip()
     try:
         chat = await bot.get_chat(channel)
-        member = await bot.get_chat_member(chat.id,bot.id)
+        member = await bot.get_chat_member(chat.id, bot.id)
 
-        if member.status not in["member"]:
-            await message.answer(" Make me admin and send again.")
+
+        if member.status not in ["administrator", "creator"]:
+            await message.answer("Make me admin and send again.")
             return
         
-        await state.update_data(destination=chat.id)
-        await message.answer("destination channel saved.")
-        await state.clear()        
+        data = await state.get_data()
+        source_id = data.get("source")
+
+        if not source_id:
+            await message.answer("First add source channel.")
+            await state.clear()
+            return
+
+        save_rule(message.from_user.id, source_id, chat.id)
+
+        await message.answer("Rule saved! Auto-forwarding is now active.")
+        await state.clear()
+
     except:
-        await message.answer("invalidate channel hai lodu")
+        await message.answer("Invalid channel.")
+
+
+@dp.channel_post()
+async def forward_from_source(message: types.Message):
+    source_id = message.chat.id
+
+    cursor.execute(
+        "SELECT destination_chat_id FROM rules WHERE source_chat_id = %s",
+        (source_id,)
+    )
+    destinations = cursor.fetchall()
+
+    for (dest_id,) in destinations:
+        try:
+            await message.copy_to(dest_id)
+        except:
+            pass
 
 
 @dp.message()
@@ -134,7 +168,7 @@ async def any_message(message: types.Message):
         save_user(uid, user.first_name, user.username)
         await message.answer("You are new, I saved you in my memory 😊")
     else:
-        await message.answer("I already know you 😎")  
+        await message.answer("I already know you ")  
 
 
 
