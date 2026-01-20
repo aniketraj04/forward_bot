@@ -32,11 +32,16 @@ def save_user(user_id, first_name, username):
     db.commit()
 
 def save_rule(user_id, source_id, dest_id):
-    cursor.execute(
-        "INSERT INTO rules (user_id, source_chat_id, destination_chat_id) VALUES (%s, %s, %s)",
-        (user_id, source_id, dest_id)
-    )
-    db.commit()
+    try:
+        cursor.execute(
+            "INSERT INTO rules (user_id, source_chat_id, destination_chat_id) VALUES (%s, %s, %s)",
+            (user_id, source_id, dest_id)
+        )
+        db.commit()
+        return True
+    except mysql.connector.errors.IntegrityError:
+        return False
+
 #button
 
 def main_menu():
@@ -133,10 +138,16 @@ async def get_destination(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        save_rule(message.from_user.id, source_id, chat.id)
+        ok = save_rule(message.from_user.id, source_id, chat.id)
 
-        await message.answer("Rule saved! Auto-forwarding is now active.")
+        if not ok:
+           await message.answer("❌ This channel is already added for this source.")
+           await state.clear()
+           return
+
+        await message.answer("✅ Rule saved! Auto-forwarding is now active.")
         await state.clear()
+
 
     except:
         await message.answer("Invalid channel.")
@@ -176,6 +187,3 @@ async def main():
     await dp.start_polling(bot)
 
 asyncio.run(main())
-
-
-
