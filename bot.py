@@ -138,11 +138,11 @@ async def button_handler(call: types.CallbackQuery, state: FSMContext):
         )
 
     elif call.data == "add_source":
-        await call.message.answer("Send me the SOURCE channel ID or username.")
+        await call.message.answer("Forward a post from your SOURCE channel.")
         await state.set_state(RuleState.Waiting_source)
 
     elif call.data == "add_destination":
-        await call.message.answer("Send me the DESTINATION channel ID or username.")
+        await call.message.answer("Forward a post from DESTINATION channel (send multiple, then /done).")
         await state.set_state(RuleState.Waiting_destination)
     await call.answer()
 
@@ -154,57 +154,86 @@ async def button_handler(call: types.CallbackQuery, state: FSMContext):
 #source 
 @dp.message(RuleState.Waiting_source)
 async def get_source(message: types.Message, state: FSMContext):
-    channel = message.text.strip()
-    try:
-        chat = await bot.get_chat(channel)
-        member = await bot.get_chat_member(chat.id, bot.id)
+    if message.forward_from_chat is not None:
+        channel = message.forward_from_chat.id
 
-        if member.status not in ["administrator", "creator"]:
-            await message.answer("Make me admin and send again.")
-            return        
+        print(message.forward_from_chat.id)
+        try:
+            chat = await bot.get_chat(channel)
+            member = await bot.get_chat_member(chat.id, bot.id)
 
-        await state.update_data(source=chat.id)
-        await message.answer("Source channel saved. Now add destination channel.")
+            if member.status not in ["administrator", "creator"]:
+                await message.answer("Make me admin and send again.")
+                return        
+
+            await state.update_data(source=chat.id)
+            await message.answer("Source channel saved. Now add destination channel.")
 
 
-    except:
-        await message.answer("Invalid channel.")
+        except:
+            await message.answer("Invalid channel.")
+    else:
+        await message.answer("please forward only a post from your channel")
 
 
 #destination_weding 
 @dp.message(RuleState.Waiting_destination)
 async def get_destination(message: types.Message, state: FSMContext):
-    channel = message.text.strip()
-    try:
-        chat = await bot.get_chat(channel)
-        member = await bot.get_chat_member(chat.id, bot.id)
 
-
-        if member.status not in ["administrator", "creator"]:
-            await message.answer("Make me admin and send again.")
-            return
-        
+    # When user finishes adding destinations
+    if message.text == "/done":
         data = await state.get_data()
         source_id = data.get("source")
+        destinations = data.get("destinations", [])
 
-        if not source_id:
-            await message.answer("First add source channel.")
+        if not source_id or not destinations:
+            await message.answer("Source or destination missing.")
             await state.clear()
             return
 
-        ok = save_rule(message.from_user.id, source_id, chat.id)
+        for dest in destinations:
+            save_rule(message.from_user.id, source_id, dest)
 
-        if not ok:
-           await message.answer("❌ This channel is already added for this source.")
-           await state.clear()
-           return
-
-        await message.answer("✅ Rule saved! Auto-forwarding is now active.")
+        await message.answer("✅ All destinations saved! Auto-forwarding is now active.")
         await state.clear()
+        return
 
+    # When user forwards a channel post
+    if message.forward_from_chat is not None:
+        channel = message.forward_from_chat.id
+        print(channel)
 
-    except:
-        await message.answer("Invalid channel.")
+        try:
+            chat = await bot.get_chat(channel)
+            member = await bot.get_chat_member(chat.id, bot.id)
+
+            if member.status not in ["administrator", "creator"]:
+                await message.answer("Make me admin and send again.")
+                return
+            
+            data = await state.get_data()
+            source_id = data.get("source")
+
+            if not source_id:
+                await message.answer("First add source channel.")
+                await state.clear()
+                return
+            
+            destinations = data.get("destinations", [])
+
+            if channel not in destinations:
+                destinations.append(channel)
+                await state.update_data(destinations=destinations)
+                await message.answer("Channel added. Send more or type /done")
+            else:
+                await message.answer("This channel is already added.")
+
+        except:
+            await message.answer("Invalid channel.")
+
+    else:
+        await message.answer("Please forward only a post from your channel.")
+
 
 
 @dp.channel_post()
