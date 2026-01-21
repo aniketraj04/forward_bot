@@ -31,6 +31,20 @@ def save_user(user_id, first_name, username):
     )
     db.commit()
 
+def get_user_rules(user_id):
+    cursor.execute(
+        "SELECT id, source_chat_id, destination_chat_id FROM rules WHERE user_id=%s",
+        (user_id,)
+    )
+    return cursor.fetchall()
+
+def delete_rule(rule_id, user_id):
+    cursor.execute(
+        "DELETE FROM rules WHERE  id=%s AND user_id=%s",
+        (rule_id, user_id)
+    )
+    db.commit()
+
 def save_rule(user_id, source_id, dest_id):
     try:
         cursor.execute(
@@ -46,8 +60,10 @@ def save_rule(user_id, source_id, dest_id):
 
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="set forwarding rules", callback_data="set_rules")]
+        [InlineKeyboardButton(text="set forwarding rules", callback_data="set_rules")],
+        [InlineKeyboardButton(text="my rules", callback_data="my_rules")]
     ])
+
 
 def rules_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -77,7 +93,42 @@ async def start_handler(message: types.Message):
     )    
 
 
-#button handler
+#button handler 
+
+@dp.callback_query(lambda c: c.data == "my_rules")
+async def show_rules(call: types.CallbackQuery):
+    rules = get_user_rules(call.from_user.id)
+
+    if not rules:
+        await call.message.answer("you have no rules.")
+        await call.answer()
+        return
+    
+    kb = []
+    for rid, src, dst in rules:
+        kb.append([
+            InlineKeyboardButton(
+                text=f"{src} -> {dst}",
+                callback_data=f"del_{rid}"
+            )
+        ])
+    await call.message.answer(
+        "your rules (tap to delete):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
+    )    
+    await call.answer()
+
+
+
+@dp.callback_query(lambda c: c.data.startswith("del_"))
+async def delete_rule_btn(call: types.CallbackQuery):
+    rule_id = int(call.data.split("_")[1])
+    delete_rule(rule_id, call.from_user.id)
+    await call.message.answer("❌ Rule deleted.")
+    await show_rules(call)
+    await call.answer()
+
+
 @dp.callback_query()
 async def button_handler(call: types.CallbackQuery, state: FSMContext):
     if call.data == "set_rules":
@@ -94,6 +145,9 @@ async def button_handler(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("Send me the DESTINATION channel ID or username.")
         await state.set_state(RuleState.Waiting_destination)
     await call.answer()
+
+
+
 
 ###########
 
