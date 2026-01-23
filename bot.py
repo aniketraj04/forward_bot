@@ -33,10 +33,11 @@ def save_user(user_id, first_name, username):
 
 def get_user_rules(user_id):
     cursor.execute(
-        "SELECT id, source_chat_id, destination_chat_id FROM rules WHERE user_id=%s",
+        "SELECT id, source_chat_id, destination_chat_ids FROM rules WHERE user_id=%s",
         (user_id,)
     )
     return cursor.fetchall()
+
 
 def delete_rule(rule_id, user_id):
     cursor.execute(
@@ -45,11 +46,11 @@ def delete_rule(rule_id, user_id):
     )
     db.commit()
 
-def save_rule(user_id, source_id, dest_id):
+def save_rule(user_id, source_id, destination_ids_str):
     try:
         cursor.execute(
-            "INSERT INTO rules (user_id, source_chat_id, destination_chat_id) VALUES (%s, %s, %s)",
-            (user_id, source_id, dest_id)
+            "INSERT INTO rules (user_id, source_chat_id, destination_chat_ids) VALUES (%s,%s,%s)",
+            (user_id, source_id, destination_ids_str)
         )
         db.commit()
         return True
@@ -100,23 +101,25 @@ async def show_rules(call: types.CallbackQuery):
     rules = get_user_rules(call.from_user.id)
 
     if not rules:
-        await call.message.answer("you have no rules.")
+        await call.message.answer("You have no rules.")
         await call.answer()
         return
-    
+
     kb = []
-    for rid, src, dst in rules:
+    for rid, src, dsts in rules:
         kb.append([
             InlineKeyboardButton(
-                text=f"{src} -> {dst}",
+                text=f"{src} → {dsts}",
                 callback_data=f"del_{rid}"
             )
         ])
+
     await call.message.answer(
-        "your rules (tap to delete):",
+        "Your rules (tap to delete):",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
-    )    
+    )
     await call.answer()
+
 
 
 
@@ -180,7 +183,7 @@ async def get_source(message: types.Message, state: FSMContext):
 @dp.message(RuleState.Waiting_destination)
 async def get_destination(message: types.Message, state: FSMContext):
 
-    # When user finishes adding destinations
+    # FINAL SAVE
     if message.text == "/done":
         data = await state.get_data()
         source_id = data.get("source")
@@ -191,48 +194,36 @@ async def get_destination(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        for dest in destinations:
-            save_rule(message.from_user.id, source_id, dest)
+        dest_string = ",".join(map(str, destinations))
 
-        await message.answer("✅ All destinations saved! Auto-forwarding is now active.")
+        save_rule(message.from_user.id, source_id, dest_string)
+
+        await message.answer("✅ Rule saved with multiple destinations!")
         await state.clear()
         return
 
-    # When user forwards a channel post
-    if message.forward_from_chat is not None:
+    # ADD DESTINATION
+    if message.forward_from_chat:
         channel = message.forward_from_chat.id
-        print(channel)
 
-        try:
-            chat = await bot.get_chat(channel)
-            member = await bot.get_chat_member(chat.id, bot.id)
+        chat = await bot.get_chat(channel)
+        member = await bot.get_chat_member(chat.id, bot.id)
 
-            if member.status not in ["administrator", "creator"]:
-                await message.answer("Make me admin and send again.")
-                return
-            
-            data = await state.get_data()
-            source_id = data.get("source")
+        if member.status not in ["administrator", "creator"]:
+            await message.answer("Make me admin first.")
+            return
 
-            if not source_id:
-                await message.answer("First add source channel.")
-                await state.clear()
-                return
-            
-            destinations = data.get("destinations", [])
+        data = await state.get_data()
+        destinations = data.get("destinations", [])
 
-            if channel not in destinations:
-                destinations.append(channel)
-                await state.update_data(destinations=destinations)
-                await message.answer("Channel added. Send more or type /done")
-            else:
-                await message.answer("This channel is already added.")
-
-        except:
-            await message.answer("Invalid channel.")
-
+        if channel not in destinations:
+            destinations.append(channel)
+            await state.update_data(destinations=destinations)
+            await message.answer("Channel added. Send more or /done")
+        else:
+            await message.answer("Channel already added.")
     else:
-        await message.answer("Please forward only a post from your channel.")
+        await message.answer("Forward a channel post only.")
 
 
 
@@ -241,17 +232,19 @@ async def forward_from_source(message: types.Message):
     source_id = message.chat.id
 
     cursor.execute(
-        "SELECT destination_chat_id FROM rules WHERE source_chat_id = %s",
+        "SELECT destination_chat_ids FROM rules WHERE source_chat_id=%s",
         (source_id,)
     )
-    destinations = cursor.fetchall()
+    rows = cursor.fetchall()
 
-    for (dest_id,) in destinations:
-        try:
-            await message.copy_to(dest_id)
-        except:
-            pass
+    for (dest_string,) in rows:
+        dest_ids = dest_string.split(",")
 
+        for dest_id in dest_ids:
+            try:
+                await message.copy_to(int(dest_id))
+            except:
+                pass
 
 @dp.message()
 async def any_message(message: types.Message):
