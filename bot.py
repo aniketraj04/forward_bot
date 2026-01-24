@@ -106,18 +106,29 @@ async def show_rules(call: types.CallbackQuery):
         return
 
     kb = []
+
     for rid, src, dsts in rules:
         kb.append([
             InlineKeyboardButton(
                 text=f"{src} → {dsts}",
-                callback_data=f"del_{rid}"
+                callback_data="noop"
             )
         ])
+        kb.append([
+        InlineKeyboardButton(
+            text="Delete",
+            callback_data=f"del_{rid}"
+        )
+    ])    
 
     await call.message.answer(
         "Your rules (tap to delete):",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
     )
+    await call.answer()
+
+@dp.callback_query(lambda c: c.data == "noop")
+async def noop_handler(call: types.CallbackQuery):
     await call.answer()
 
 
