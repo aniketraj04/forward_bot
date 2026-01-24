@@ -20,6 +20,13 @@ cursor = db.cursor()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+async def get_chat_name(chat_id: int) -> str:
+    try:
+        chat = await bot.get_chat(chat_id)
+        return chat.title or chat.username or str(chat_id)
+    except:
+        return str(chat_id)
+
 def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
     return cursor.fetchone()
@@ -95,7 +102,6 @@ async def start_handler(message: types.Message):
 
 
 #button handler 
-
 @dp.callback_query(lambda c: c.data == "my_rules")
 async def show_rules(call: types.CallbackQuery):
     rules = get_user_rules(call.from_user.id)
@@ -107,25 +113,39 @@ async def show_rules(call: types.CallbackQuery):
 
     kb = []
 
-    for rid, src, dsts in rules:
+    for rid, src_id, dst_string in rules:
+        # Source name
+        src_name = await get_chat_name(int(src_id))
+
+        # Destination names
+        dst_ids = dst_string.split(",")
+        dst_names = []
+        for d in dst_ids:
+            name = await get_chat_name(int(d))
+            dst_names.append(name)
+
+        pretty_text = f"{src_name} → {', '.join(dst_names)}"
+
         kb.append([
             InlineKeyboardButton(
-                text=f"{src} → {dsts}",
+                text=pretty_text,
                 callback_data="noop"
             )
         ])
+
         kb.append([
-        InlineKeyboardButton(
-            text="Delete",
-            callback_data=f"del_{rid}"
-        )
-    ])    
+            InlineKeyboardButton(
+                text="🗑 Delete",
+                callback_data=f"del_{rid}"
+            )
+        ])
 
     await call.message.answer(
-        "Your rules (tap to delete):",
+        "📋 Your forwarding rules:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
     )
     await call.answer()
+
 
 @dp.callback_query(lambda c: c.data == "noop")
 async def noop_handler(call: types.CallbackQuery):
