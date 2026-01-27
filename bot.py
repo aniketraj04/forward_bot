@@ -107,10 +107,13 @@ async def show_rules(call: types.CallbackQuery):
     rules = get_user_rules(call.from_user.id)
 
     if not rules:
-        await call.message.answer("You have no rules.")
-        await call.answer()
+        await call.message.answer(
+            "😕 You haven’t created any forwarding rules yet.\n"
+            "➕ Tap \"Set forwarding rules\" to start.",
+            reply_markup=main_menu()
+        )
+        await call.answer
         return
-
     kb = []
 
     for rid, src_id, dst_string in rules:
