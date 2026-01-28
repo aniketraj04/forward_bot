@@ -26,6 +26,13 @@ async def get_chat_name(chat_id: int) -> str:
         return chat.title or chat.username or str(chat_id)
     except:
         return str(chat_id)
+    
+def toggle_rule(rule_id, user_id):
+    cursor.execute(
+        "UPDATE rules SET is_active = NOT is_active WHERE id=%s AND user_id=%s",(rule_id, user_id)
+
+    )
+    db.commit()
 
 def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
@@ -40,7 +47,7 @@ def save_user(user_id, first_name, username):
 
 def get_user_rules(user_id):
     cursor.execute(
-        "SELECT id, source_chat_id, destination_chat_ids FROM rules WHERE user_id=%s",
+        "SELECT id, source_chat_id, destination_chat_ids, is_active  FROM rules WHERE user_id=%s",
         (user_id,)
     )
     return cursor.fetchall()
@@ -112,11 +119,11 @@ async def show_rules(call: types.CallbackQuery):
             "➕ Tap \"Set forwarding rules\" to start.",
             reply_markup=main_menu()
         )
-        await call.answer
+        await call.answer()
         return
     kb = []
 
-    for rid, src_id, dst_string in rules:
+    for rid, src_id, dst_string, is_active in rules:
         # Source name
         src_name = await get_chat_name(int(src_id))
 
@@ -128,20 +135,28 @@ async def show_rules(call: types.CallbackQuery):
             dst_names.append(name)
 
         pretty_text = f"{src_name} → {', '.join(dst_names)}"
+        
+        status_icon = "🟢 ON" if is_active else "⏸ OFF"
+        toggle_text = "⏸ Pause" if is_active else "▶️ Resume"
 
         kb.append([
             InlineKeyboardButton(
-                text=pretty_text,
+                text=f"{pretty_text} ({status_icon})",
                 callback_data="noop"
             )
         ])
 
         kb.append([
             InlineKeyboardButton(
+                text=toggle_text,
+                callback_data=f"toggle_{rid}"
+            ),
+            InlineKeyboardButton(
                 text="🗑 Delete",
                 callback_data=f"del_{rid}"
             )
         ])
+
 
     await call.message.answer(
         "📋 Your forwarding rules:",
@@ -164,6 +179,16 @@ async def delete_rule_btn(call: types.CallbackQuery):
     await call.message.answer("❌ Rule deleted.")
     await show_rules(call)
     await call.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("toggle_"))
+async def toggle_rule_btn(call: types.CallbackQuery):
+    rule_id = int(call.data.split("_")[1])
+
+    toggle_rule(rule_id, call.from_user.id)
+
+    await call.answer("Rule status updated")
+    await show_rules(call)
+
 
 
 @dp.callback_query()
@@ -266,7 +291,7 @@ async def forward_from_source(message: types.Message):
     source_id = message.chat.id
 
     cursor.execute(
-        "SELECT destination_chat_ids FROM rules WHERE source_chat_id=%s",
+        "SELECT destination_chat_ids FROM rules WHERE source_chat_id=%s AND is_active=1",
         (source_id,)
     )
     rows = cursor.fetchall()
