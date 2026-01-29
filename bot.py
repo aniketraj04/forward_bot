@@ -239,8 +239,9 @@ async def toggle_rule_btn(call: types.CallbackQuery):
     await show_rules(call)
 
 # start change from here time:- 8:12pm 29
-@dp.callback_query(lambda c: c.data == "edit_remove")
+@dp.callback_query(EditRuleState.ChoosingAction, lambda c: c.data == "edit_remove")
 async def edit_remove(call: types.CallbackQuery, state: FSMContext):
+
     data = await state.get_data()
     destinations = data["destinations"]
 
