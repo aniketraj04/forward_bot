@@ -185,7 +185,7 @@ async def delete_rule_btn(call: types.CallbackQuery):
     await call.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("edit_") and c.data.split("_")[1].isdigit())
+@dp.callback_query(lambda c: c.data.startswith("edit_") and c.data[5:].isdigit())
 async def edit_rule(call: types.CallbackQuery, state: FSMContext):
 
     rule_id = int(call.data.split("_")[1])
