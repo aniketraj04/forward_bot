@@ -3,7 +3,7 @@ import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from states import RuleState
+from states import RuleState, EditRuleState
 from aiogram.fsm.context import FSMContext
 
 BOT_TOKEN = "7244754211:AAGLxPr5R73tKSTZh6KTCaOwaKr_BYdefC8"
@@ -148,6 +148,10 @@ async def show_rules(call: types.CallbackQuery):
 
         kb.append([
             InlineKeyboardButton(
+                text = "✏️ Edit",
+                callback_data=f"edit_{rid}"
+            ),
+            InlineKeyboardButton(
                 text=toggle_text,
                 callback_data=f"toggle_{rid}"
             ),
@@ -180,6 +184,51 @@ async def delete_rule_btn(call: types.CallbackQuery):
     await show_rules(call)
     await call.answer()
 
+
+@dp.callback_query(lambda c: c.data.startswith("edit_") and c.data.split("_")[1].isdigit())
+async def edit_rule(call: types.CallbackQuery, state: FSMContext):
+
+    rule_id = int(call.data.split("_")[1])
+
+    #fetch rule
+    cursor.execute(
+        "SELECT destination_chat_ids FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, call.from_user.id)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        await call.answer("Rule not found")
+        return
+    
+    destinations = row[0].split(",")
+
+    await state.update_data(
+        rule_id=rule_id,
+        destinations=destinations
+    )
+
+    kb = [
+        [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
+        [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [InlineKeyboardButton(text="✅ Done", callback_data="edit_done")]
+    ]
+
+
+    await call.message.answer(
+        "✏️ Edit rule:\nChoose what you want to do",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
+    )
+
+    await state.set_state(EditRuleState.ChoosingAction)
+    await call.answer()
+
+@dp.callback_query(lambda c: c.data=="edit_add")
+async def edit_add(call: types.CallbackQuery,  state: FSMContext):
+    await call.message.answer("Forward a post from the channel to ADD")
+    await state.set_state(EditRuleState.AddingDestination)
+    await call.answer()
+
 @dp.callback_query(lambda c: c.data.startswith("toggle_"))
 async def toggle_rule_btn(call: types.CallbackQuery):
     rule_id = int(call.data.split("_")[1])
@@ -188,6 +237,71 @@ async def toggle_rule_btn(call: types.CallbackQuery):
 
     await call.answer("Rule status updated")
     await show_rules(call)
+
+# start change from here time:- 8:12pm 29
+@dp.callback_query(lambda c: c.data == "edit_remove")
+async def edit_remove(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    destinations = data["destinations"]
+
+    kb = []
+    for d in destinations:
+        name = await get_chat_name(int(d))
+        kb.append([
+            InlineKeyboardButton(
+                text=f"➖ {name}",
+                callback_data=f"remove_{d}"
+            )
+        ])
+
+    await call.message.answer(
+        "Select destination to remove:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
+    )
+
+    await state.set_state(EditRuleState.RemovingDestination)
+    await call.answer()
+
+
+@dp.callback_query(EditRuleState.RemovingDestination, lambda c: c.data.startswith("remove_"))
+async def remove_destination(call: types.CallbackQuery, state: FSMContext):
+
+    remove_id = call.data.split("_")[1]
+
+    data = await state.get_data()
+    destinations = data["destinations"]
+
+    destinations.remove(remove_id)
+    await state.update_data(destinations=destinations)
+
+    await call.answer("❌ Removed")
+
+@dp.callback_query(lambda c: c.data == "edit_done")
+async def edit_done(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    rule_id = data["rule_id"]
+    destinations = data["destinations"]
+
+    if not destinations:
+        await call.answer(
+            "❌ A rule must have at least one destination",
+            show_alert=True
+        )
+        return
+
+    dest_string = ",".join(destinations)
+
+
+    cursor.execute(
+        "UPDATE rules SET destination_chat_ids=%s WHERE id=%s AND user_id=%s",
+        (dest_string, rule_id, call.from_user.id)
+    )
+    db.commit()
+
+    await state.clear()
+    await call.message.answer("✅ Rule updated successfully")
+    await show_rules(call)
+    await call.answer()
 
 
 
@@ -208,11 +322,28 @@ async def button_handler(call: types.CallbackQuery, state: FSMContext):
         await state.set_state(RuleState.Waiting_destination)
     await call.answer()
 
+####
+@dp.message(EditRuleState.AddingDestination)
+async def add_destination(message: types.Message, state: FSMContext):
+    if not message.forward_from_chat:
+        await message.answer("Please forward a channel post")
+        return
 
+    channel_id = message.forward_from_chat.id
+    data = await state.get_data()
+    destinations = data["destinations"]
+
+    if str(channel_id) in destinations:
+        await message.answer("Already exists")
+        return
+
+    destinations.append(str(channel_id))
+    await state.update_data(destinations=destinations)
+
+    await message.answer("✅ Destination added")
 
 
 ###########
-
 #source 
 @dp.message(RuleState.Waiting_source)
 async def get_source(message: types.Message, state: FSMContext):
