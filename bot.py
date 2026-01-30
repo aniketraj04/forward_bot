@@ -239,11 +239,15 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     kb = [
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
-        [InlineKeyboardButton(text="✅ Done", callback_data="edit_done")]
+
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
+        ]
     ]
 
 
-    await call.message.answer(
+    await call.message.edit_text(
         "✏️ Edit rule:\nChoose what you want to do",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
     )
@@ -251,9 +255,18 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(EditRuleState.ChoosingAction)
     await call.answer()
 
+@dp.callback_query(lambda c: c.data == "edit_cancel")
+async def edit_cancel(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+
+    await call.message.edit_text("📋 Your forwarding rules:")
+    await show_rules(call)
+
+    await call.answer()
+
 @dp.callback_query(lambda c: c.data=="edit_add")
 async def edit_add(call: types.CallbackQuery,  state: FSMContext):
-    await call.message.answer("Forward a post from the channel to ADD")
+    await call.message.edit_text("Forward a post from the channel to ADD")
     await state.set_state(EditRuleState.AddingDestination)
     await call.answer()
 
@@ -272,7 +285,7 @@ async def edit_remove(call: types.CallbackQuery, state: FSMContext):
 
     await state.set_state(EditRuleState.RemovingDestination)
 
-    await call.message.answer("Select destination to remove:")
+    await call.message.edit_text("Select destination to remove:")
 
     #  Render live removable list + Done button
     await send_remove_ui(call, state)
@@ -291,7 +304,7 @@ async def remove_destination(call: types.CallbackQuery, state: FSMContext):
         destinations.remove(remove_id)
         await state.update_data(destinations=destinations)
 
-    # 🔥 REAL-TIME UI UPDATE
+    #  REAL-TIME UI UPDATE
     await send_remove_ui(call, state)
 
     await call.answer("❌ Removed")
