@@ -27,6 +27,34 @@ async def get_chat_name(chat_id: int) -> str:
     except:
         return str(chat_id)
     
+async def send_remove_ui(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    destinations = data.get("destinations", [])
+
+    kb = []
+
+    for d in destinations:
+        name = await get_chat_name(int(d))
+        kb.append([
+            InlineKeyboardButton(
+                text=f"➖ {name}",
+                callback_data=f"remove_{d}"
+            )
+        ])
+
+    # DONE button (same screen)
+    kb.append([
+        InlineKeyboardButton(
+            text="✅ Done",
+            callback_data="edit_done"
+        )
+    ])
+
+    await call.message.edit_reply_markup(
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
+    )
+
+    
 def toggle_rule(rule_id, user_id):
     cursor.execute(
         "UPDATE rules SET is_active = NOT is_active WHERE id=%s AND user_id=%s",(rule_id, user_id)
@@ -242,40 +270,32 @@ async def toggle_rule_btn(call: types.CallbackQuery):
 @dp.callback_query(EditRuleState.ChoosingAction, lambda c: c.data == "edit_remove")
 async def edit_remove(call: types.CallbackQuery, state: FSMContext):
 
-    data = await state.get_data()
-    destinations = data["destinations"]
-
-    kb = []
-    for d in destinations:
-        name = await get_chat_name(int(d))
-        kb.append([
-            InlineKeyboardButton(
-                text=f"➖ {name}",
-                callback_data=f"remove_{d}"
-            )
-        ])
-
-    await call.message.answer(
-        "Select destination to remove:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
-    )
-
     await state.set_state(EditRuleState.RemovingDestination)
+
+    await call.message.answer("Select destination to remove:")
+
+    #  Render live removable list + Done button
+    await send_remove_ui(call, state)
+
     await call.answer()
 
 
 @dp.callback_query(EditRuleState.RemovingDestination, lambda c: c.data.startswith("remove_"))
 async def remove_destination(call: types.CallbackQuery, state: FSMContext):
-
     remove_id = call.data.split("_")[1]
 
     data = await state.get_data()
-    destinations = data["destinations"]
+    destinations = data.get("destinations", [])
 
-    destinations.remove(remove_id)
-    await state.update_data(destinations=destinations)
+    if remove_id in destinations:
+        destinations.remove(remove_id)
+        await state.update_data(destinations=destinations)
+
+    # 🔥 REAL-TIME UI UPDATE
+    await send_remove_ui(call, state)
 
     await call.answer("❌ Removed")
+
 
 @dp.callback_query(lambda c: c.data == "edit_done")
 async def edit_done(call: types.CallbackQuery, state: FSMContext):
