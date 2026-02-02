@@ -215,10 +215,8 @@ async def delete_rule_btn(call: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("edit_") and c.data[5:].isdigit())
 async def edit_rule(call: types.CallbackQuery, state: FSMContext):
-
     rule_id = int(call.data.split("_")[1])
 
-    #fetch rule
     cursor.execute(
         "SELECT destination_chat_ids FROM rules WHERE id=%s AND user_id=%s",
         (rule_id, call.from_user.id)
@@ -228,32 +226,29 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     if not row:
         await call.answer("Rule not found")
         return
-    
-    destinations = row[0].split(",")
 
     await state.update_data(
         rule_id=rule_id,
-        destinations=destinations
+        destinations=row[0].split(",")
     )
 
-    kb = [
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
-
         [
             InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
             InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
         ]
-    ]
-
+    ])
 
     await call.message.edit_text(
         "✏️ Edit rule:\nChoose what you want to do",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb)
+        reply_markup=kb
     )
 
     await state.set_state(EditRuleState.ChoosingAction)
     await call.answer()
+
 
 @dp.callback_query(lambda c: c.data == "edit_cancel")
 async def edit_cancel(call: types.CallbackQuery, state: FSMContext):
@@ -264,11 +259,30 @@ async def edit_cancel(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer()
 
-@dp.callback_query(lambda c: c.data=="edit_add")
-async def edit_add(call: types.CallbackQuery,  state: FSMContext):
-    await call.message.edit_text("Forward a post from the channel to ADD")
+@dp.callback_query(lambda c: c.data == "edit_add")
+async def edit_add(call: types.CallbackQuery, state: FSMContext):
+
     await state.set_state(EditRuleState.AddingDestination)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
+        [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
+        ]
+    ])
+
+    await call.message.edit_text(
+        "📥 Forward a post from the channel to ADD destination\n\n"
+        "You can add multiple channels.\n"
+        "Press ✅ Done when finished or ❌ Cancel.",
+        reply_markup=kb
+    )
+
     await call.answer()
+
+
 
 @dp.callback_query(lambda c: c.data.startswith("toggle_"))
 async def toggle_rule_btn(call: types.CallbackQuery):
@@ -333,9 +347,9 @@ async def edit_done(call: types.CallbackQuery, state: FSMContext):
     db.commit()
 
     await state.clear()
-    await call.message.answer("✅ Rule updated successfully")
+    await call.message.delete()
     await show_rules(call)
-    await call.answer()
+    await call.answer("✅ Rule updated")
 
 
 
