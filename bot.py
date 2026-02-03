@@ -235,6 +235,7 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
         [
             InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
             InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
@@ -306,6 +307,65 @@ async def edit_remove(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer()
 
+# function for filter buttons ui 
+
+def filter_keyboard(filters: dict):
+    def btn(name):
+        return InlineKeyboardButton(
+            text=f"✅ {name}" if filters.get(name) else f"⬜ {name}",
+            callback_data=f"filter_{name}"
+        )
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn("all")],
+        [btn("text"), btn("photo"), btn("video")],
+        [btn("audio"), btn("document"),btn("link")],
+        [InlineKeyboardButton(text="⬅ Back", callback_data="filter_back")]
+    ])
+
+
+# handjob for opening filters
+@dp.callback_query(lambda c: c.data == "edit_filters")
+async def edit_filters(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+
+    filters = data.get("filters",{
+        "all": 1, "text": 0, "photo": 0, "video": 0,
+        "audio": 0, "document": 0, "link": 0
+    })
+
+    await state.update_data(filters=filters)
+
+    await call.message.edit_text(
+        "🎛 Select allowed message types:",
+        reply_markup=filter_keyboard(filters)
+    )
+
+    await call.answer()
+
+# handle filter toggle clicks
+@dp.callback_query(lambda c: c.data.startswith("filter_"))
+async def toggle_filter(call: types.CallbackQuery, state: FSMContext):
+    key = call.data.replace("filter_", "")
+    data = await state.get_data()
+    filters = data["filters"]
+
+    if key == "all":
+        for k in filters:
+            filters[k] = 1
+    else:
+        filters["all"] = 0
+        filters[key] = 0 if filters[key] else 1
+
+    await state.update_data(filters=filters)
+
+    await call.message.edit_reply_markup(
+        reply_markup=filter_keyboard(filters)
+    )
+
+    await call.answer()
+
+
 
 @dp.callback_query(EditRuleState.RemovingDestination, lambda c: c.data.startswith("remove_"))
 async def remove_destination(call: types.CallbackQuery, state: FSMContext):
@@ -324,6 +384,7 @@ async def remove_destination(call: types.CallbackQuery, state: FSMContext):
     await call.answer("❌ Removed")
 
 
+
 @dp.callback_query(lambda c: c.data == "edit_done")
 async def edit_done(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -336,13 +397,18 @@ async def edit_done(call: types.CallbackQuery, state: FSMContext):
             show_alert=True
         )
         return
-
+    
+    #...
+    filters = data.get("filters", {"all": 1})
+    enabled = [k for k, v in filters.items() if v == 1]
+    filter_string = ",".join(enabled)
+    #..
     dest_string = ",".join(destinations)
 
 
     cursor.execute(
-        "UPDATE rules SET destination_chat_ids=%s WHERE id=%s AND user_id=%s",
-        (dest_string, rule_id, call.from_user.id)
+        "UPDATE rules SET destination_chat_ids=%s, filter_types=%s WHERE id=%s AND user_id=%s",
+        (dest_string, filter_string, rule_id, call.from_user.id)
     )
     db.commit()
 
@@ -464,25 +530,50 @@ async def get_destination(message: types.Message, state: FSMContext):
         await message.answer("Forward a channel post only.")
 
 
+def get_message_type(msg: types.Message):
+    if msg.text and "http" in msg.text:
+        return "link"
+    if msg.text:
+        return "text"
+    if msg.photo:
+        return "photo"
+    if msg.video:
+        return "video"
+    if msg.audio:
+        return "audio"
+    if msg.document:
+        return "document"
+    return None
+
+
 
 @dp.channel_post()
 async def forward_from_source(message: types.Message):
     source_id = message.chat.id
 
     cursor.execute(
-        "SELECT destination_chat_ids FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types FROM rules WHERE source_chat_id=%s AND is_active=1",
         (source_id,)
     )
     rows = cursor.fetchall()
 
-    for (dest_string,) in rows:
-        dest_ids = dest_string.split(",")
+    #  detect message type ONCE
+    msg_type = get_message_type(message)
 
-        for dest_id in dest_ids:
+    for dest_string, filter_types in rows:
+        allowed = filter_types.split(",")
+
+        #  skip if not allowed
+        if "all" not in allowed and msg_type not in allowed:
+            continue
+
+        #  forward only if allowed
+        for dest_id in dest_string.split(","):
             try:
                 await message.copy_to(int(dest_id))
             except:
                 pass
+
 
 @dp.message()
 async def any_message(message: types.Message):
