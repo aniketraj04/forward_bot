@@ -228,9 +228,19 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(
-        rule_id=rule_id,
-        destinations=row[0].split(",")
-    )
+    rule_id=rule_id,
+    destinations=row[0].split(","),
+    filters={
+        "all": 1,
+        "text": 0,
+        "photo": 0,
+        "video": 0,
+        "audio": 0,
+        "document": 0,
+        "link": 0
+    }
+)
+
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
@@ -343,12 +353,47 @@ async def edit_filters(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer()
 
+
+
+#Back button handler 
+@dp.callback_query(lambda c: c.data == "filter_back")
+async def filter_back(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
+        [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
+        ]
+    ])
+
+    await call.message.edit_text(
+        "✏️ Edit rule:\nChoose what you want to do",
+        reply_markup=kb
+    )
+
+    await call.answer()
+
+
+
 # handle filter toggle clicks
-@dp.callback_query(lambda c: c.data.startswith("filter_"))
+@dp.callback_query(lambda c: c.data.startswith("filter_") and c.data != "filter_back")
 async def toggle_filter(call: types.CallbackQuery, state: FSMContext):
     key = call.data.replace("filter_", "")
     data = await state.get_data()
-    filters = data["filters"]
+
+    filters = data.get("filters", {
+        "all": 1,
+        "text": 0,
+        "photo": 0,
+        "video": 0,
+        "audio": 0,
+        "document": 0,
+        "link": 0
+    })
 
     if key == "all":
         for k in filters:
@@ -364,6 +409,7 @@ async def toggle_filter(call: types.CallbackQuery, state: FSMContext):
     )
 
     await call.answer()
+
 
 
 
