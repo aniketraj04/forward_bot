@@ -304,6 +304,7 @@ async def toggle_rule_btn(call: types.CallbackQuery):
     await call.answer("Rule status updated")
     await show_rules(call)
 
+
 # start change from here time:- 8:12pm 29
 @dp.callback_query(EditRuleState.ChoosingAction, lambda c: c.data == "edit_remove")
 async def edit_remove(call: types.CallbackQuery, state: FSMContext):
@@ -317,21 +318,25 @@ async def edit_remove(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer()
 
-# function for filter buttons ui 
 
+# function for filter buttons ui 
 def filter_keyboard(filters: dict):
     def btn(name):
         return InlineKeyboardButton(
             text=f"✅ {name}" if filters.get(name) else f"⬜ {name}",
             callback_data=f"filter_{name}"
         )
-    
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [btn("all")],
         [btn("text"), btn("photo"), btn("video")],
-        [btn("audio"), btn("document"),btn("link")],
-        [InlineKeyboardButton(text="⬅ Back", callback_data="filter_back")]
+        [btn("audio"), btn("document"), btn("link")],
+        [
+            InlineKeyboardButton(text="⬅ Back", callback_data="filter_back"),
+            InlineKeyboardButton(text="💾 Save", callback_data="filter_save")
+        ]
     ])
+
 
 
 # handjob for opening filters
@@ -377,10 +382,54 @@ async def filter_back(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer()
 
+# filter save button ka function 
+
+@dp.callback_query(lambda c: c.data == "filter_save")
+async def filter_save(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+
+    rule_id = data["rule_id"]
+    filters = data.get("filters", {"all": 1})
+
+    enabled = [k for k, v in filters.items() if v == 1]
+    filter_string = ",".join(enabled)
+
+    cursor.execute(
+        "UPDATE rules SET filter_types=%s WHERE id=%s AND user_id=%s",
+        (filter_string, rule_id, call.from_user.id)
+    )
+    db.commit()
+
+    # Go back to edit menu
+    await state.set_state(EditRuleState.ChoosingAction)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
+        [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
+        ]
+    ])
+
+    await call.message.edit_text(
+        "✅ Filters saved.\n\n✏️ Edit rule:\nChoose what you want to do",
+        reply_markup=kb
+    )
+
+    await call.answer("Filters saved")
+
+
 
 
 # handle filter toggle clicks
-@dp.callback_query(lambda c: c.data.startswith("filter_") and c.data != "filter_back")
+
+@dp.callback_query(
+    lambda c: c.data.startswith("filter_")
+    and c.data not in ("filter_back", "filter_save")
+)
+
 async def toggle_filter(call: types.CallbackQuery, state: FSMContext):
     key = call.data.replace("filter_", "")
     data = await state.get_data()
