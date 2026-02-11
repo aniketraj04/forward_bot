@@ -217,8 +217,9 @@ async def delete_rule_btn(call: types.CallbackQuery):
 async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     rule_id = int(call.data.split("_")[1])
 
+    # Fetch both destinations AND filters
     cursor.execute(
-        "SELECT destination_chat_ids FROM rules WHERE id=%s AND user_id=%s",
+        "SELECT destination_chat_ids, filter_types FROM rules WHERE id=%s AND user_id=%s",
         (rule_id, call.from_user.id)
     )
     row = cursor.fetchone()
@@ -227,19 +228,24 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
         await call.answer("Rule not found")
         return
 
-    await state.update_data(
-    rule_id=rule_id,
-    destinations=row[0].split(","),
-    filters={
-        "all": 1,
-        "text": 0,
-        "photo": 0,
-        "video": 0,
-        "audio": 0,
-        "document": 0,
-        "link": 0
+    # Convert the saved comma-string back into a dictionary for the UI
+    saved_filters = row[1].split(",") if row[1] else ["all"]
+    filter_dict = {
+        "all": 1 if "all" in saved_filters else 0,
+        "text": 1 if "text" in saved_filters else 0,
+        "photo": 1 if "photo" in saved_filters else 0,
+        "video": 1 if "video" in saved_filters else 0,
+        "audio": 1 if "audio" in saved_filters else 0,
+        "document": 1 if "document" in saved_filters else 0,
+        "link": 1 if "link" in saved_filters else 0
     }
-)
+
+    await state.update_data(
+        rule_id=rule_id,
+        destinations=row[0].split(","),
+        filters=filter_dict
+    )
+    
 
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
