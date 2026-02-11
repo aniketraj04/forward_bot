@@ -426,37 +426,34 @@ async def filter_save(call: types.CallbackQuery, state: FSMContext):
 # handle filter toggle clicks
 
 @dp.callback_query(
-    lambda c: c.data.startswith("filter_")
+    lambda c: c.data.startswith("filter_") 
     and c.data not in ("filter_back", "filter_save")
 )
-
 async def toggle_filter(call: types.CallbackQuery, state: FSMContext):
     key = call.data.replace("filter_", "")
     data = await state.get_data()
-
+    
+    # Default filters if not set
     filters = data.get("filters", {
-        "all": 1,
-        "text": 0,
-        "photo": 0,
-        "video": 0,
-        "audio": 0,
-        "document": 0,
-        "link": 0
+        "all": 1, "text": 0, "photo": 0, "video": 0,
+        "audio": 0, "document": 0, "link": 0
     })
 
     if key == "all":
-        for k in filters:
-            filters[k] = 1
+        # Turning 'all' ON turns everything else OFF
+        filters = {k: 0 for k in filters}
+        filters["all"] = 1
     else:
+        # Turning any specific filter ON turns 'all' OFF
         filters["all"] = 0
-        filters[key] = 0 if filters[key] else 1
+        filters[key] = 1 if not filters.get(key, 0) else 0
+        
+        # If the user unchecks EVERYTHING, default back to "all"
+        if not any(filters.values()):
+            filters["all"] = 1
 
     await state.update_data(filters=filters)
-
-    await call.message.edit_reply_markup(
-        reply_markup=filter_keyboard(filters)
-    )
-
+    await call.message.edit_reply_markup(reply_markup=filter_keyboard(filters))
     await call.answer()
 
 
