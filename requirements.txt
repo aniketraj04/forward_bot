@@ -1,0 +1,3 @@
+aiogram
+mysql-connector-python
+python-dotenv
