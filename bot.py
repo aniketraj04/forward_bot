@@ -1,4 +1,4 @@
-import asyncio
+import asyncio ,os
 import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -6,16 +6,23 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from states import RuleState, EditRuleState
 from aiogram.fsm.context import FSMContext
 
-BOT_TOKEN = "7244754211:AAGLxPr5R73tKSTZh6KTCaOwaKr_BYdefC8"
 
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 db = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="root",   
-    database="tg_bot"
+    host=os.getenv("MYSQLHOST"),
+    user=os.getenv("MYSQLUSER"),
+    password=os.getenv("MYSQLPASSWORD"),
+    database=os.getenv("MYSQLDATABASE"),
+    database=os.getenv("MYSQL_DATABASE"), # Changed to match Railway
+    port=int(os.getenv("MYSQLPORT", 3306)),
+    autocommit=True 
 )
+
 cursor = db.cursor()
+
+
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
