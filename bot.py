@@ -1,4 +1,7 @@
-import asyncio ,os
+import asyncio 
+import os
+from dotenv import load_dotenv
+load_dotenv()
 import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -14,8 +17,7 @@ db = mysql.connector.connect(
     host=os.getenv("MYSQLHOST"),
     user=os.getenv("MYSQLUSER"),
     password=os.getenv("MYSQLPASSWORD"),
-    database=os.getenv("MYSQLDATABASE"),
-    database=os.getenv("MYSQL_DATABASE"), # Changed to match Railway
+    database=os.getenv("MYSQL_DATABASE"), 
     port=int(os.getenv("MYSQLPORT", 3306)),
     autocommit=True 
 )
