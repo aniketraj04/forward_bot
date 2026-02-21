@@ -1,5 +1,6 @@
 import asyncio 
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 import mysql.connector
@@ -228,7 +229,7 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
 
     # Fetch both destinations AND filters
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types FROM rules WHERE id=%s AND user_id=%s",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords FROM rules WHERE id=%s AND user_id=%s",
         (rule_id, call.from_user.id)
     )
     row = cursor.fetchone()
@@ -261,6 +262,7 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
         [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [InlineKeyboardButton(text="🚫 Blacklist", callback_data="edit_blacklist")],
         [
             InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
             InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
@@ -384,6 +386,7 @@ async def filter_back(call: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
         [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [InlineKeyboardButton(text="🚫 Blacklist", callback_data="edit_blacklist")],
         [
             InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
             InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
@@ -422,6 +425,7 @@ async def filter_save(call: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
         [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
         [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [InlineKeyboardButton(text="🚫 Blacklist", callback_data="edit_blacklist")],
         [
             InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
             InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
@@ -435,8 +439,145 @@ async def filter_save(call: types.CallbackQuery, state: FSMContext):
 
     await call.answer("Filters saved")
 
+# black liist menu ui 
+def blacklist_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add Keywords", callback_data="bl_add")],
+        [InlineKeyboardButton(text="➖ Remove Keywords", callback_data="bl_remove")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="bl_back")]
+    ])
 
 
+# Blacklist Panel handler 
+@dp.callback_query(lambda c: c.data == "edit_blacklist")
+async def edit_blacklist(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    rule_id = data["rule_id"]
+
+    cursor.execute(
+        "SELECT blacklist_keywords FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, call.from_user.id)
+    )
+    row = cursor.fetchone()
+
+    current = row[0] if row and row[0] else "None"
+
+    text = (
+        "🚫 Blacklist Keywords lets you stop forwarding posts that contain specific words.\n\n"
+        f"Current Blacklist:\n{current}"
+    )
+
+    await call.message.edit_text(text, reply_markup=blacklist_keyboard())
+    await call.answer()
+
+#Add Keywords Button Handler
+@dp.callback_query(lambda c: c.data == "bl_add")
+async def blacklist_add_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(EditRuleState.AddingBlacklist)
+
+    await call.message.edit_text(
+        "Please send the keywords you want to blacklist, separated by commas.\n\n"
+        "For example: spam, scam, crypto"
+    )
+    await call.answer()
+
+#Handle User Input
+@dp.message(EditRuleState.AddingBlacklist)
+async def add_blacklist_keywords(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    rule_id = data["rule_id"]
+
+    new_words = [w.strip().lower() for w in message.text.split(",") if w.strip()]
+
+    # Fetch existing blacklist
+    cursor.execute(
+        "SELECT blacklist_keywords FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, message.from_user.id)
+    )
+    row = cursor.fetchone()
+
+    existing = row[0].split(",") if row and row[0] else []
+
+    # Merge + remove duplicates
+    updated = list(set(existing + new_words))
+    updated_string = ",".join(updated)
+
+    cursor.execute(
+        "UPDATE rules SET blacklist_keywords=%s WHERE id=%s AND user_id=%s",
+        (updated_string, rule_id, message.from_user.id)
+    )
+    db.commit()
+
+    await state.set_state(EditRuleState.ChoosingAction)
+
+    await message.answer(
+        f"✅ {len(new_words)} keywords added to blacklist."
+    )
+
+# Remove Keywords Handler for black list 
+@dp.callback_query(lambda c: c.data == "bl_remove")
+async def blacklist_remove_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(EditRuleState.RemovingBlacklist)
+
+    await call.message.edit_text(
+        "Send the keywords you want to REMOVE from blacklist.\n\n"
+        "Example: spam, scam"
+    )
+    await call.answer()
+
+#
+@dp.message(EditRuleState.RemovingBlacklist)
+async def remove_blacklist_keywords(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    rule_id = data["rule_id"]
+
+    remove_words = [w.strip().lower() for w in message.text.split(",") if w.strip()]
+
+    cursor.execute(
+        "SELECT blacklist_keywords FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, message.from_user.id)
+    )
+    row = cursor.fetchone()
+
+    if not row or not row[0]:
+        await message.answer("No blacklist keywords found.")
+        return
+
+    existing = row[0].split(",")
+    updated = [w for w in existing if w not in remove_words]
+    updated_string = ",".join(updated)
+
+    cursor.execute(
+        "UPDATE rules SET blacklist_keywords=%s WHERE id=%s AND user_id=%s",
+        (updated_string, rule_id, message.from_user.id)
+    )
+    db.commit()
+
+    await state.set_state(EditRuleState.ChoosingAction)
+
+    await message.answer("🗑 Selected keywords removed from blacklist.")
+
+#back button handler for black list 
+
+@dp.callback_query(lambda c: c.data == "bl_back")
+async def blacklist_back(call: types.CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add destination", callback_data="edit_add")],
+        [InlineKeyboardButton(text="➖ Remove destination", callback_data="edit_remove")],
+        [InlineKeyboardButton(text="🎛 Filters", callback_data="edit_filters")],
+        [InlineKeyboardButton(text="🚫 Blacklist", callback_data="edit_blacklist")],
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data="edit_done"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="edit_cancel")
+        ]
+    ])
+
+    await state.set_state(EditRuleState.ChoosingAction)
+    await call.message.edit_text(
+        "✏️ Edit rule:\nChoose what you want to do",
+        reply_markup=kb
+    )
+    await call.answer()
 
 # handle filter toggle clicks
 
@@ -652,14 +793,45 @@ def get_message_type(msg: types.Message):
         return "document"
     return None
 
+# balcklist check function 
+def normalize_text(text: str) -> str:
+    text = text.lower()
+    # remove symbols like *, ., @ etc
+    text = re.sub(r'[^a-z0-9\s]', '', text)
+    # remove extra spaces (for f u c k bypass)
+    text = re.sub(r'\s+', ' ', text)
+    return text
 
+
+def contains_blacklist(text: str, blacklist_string: str) -> bool:
+    if not text or not blacklist_string:
+        return False
+
+    # Original text
+    original = text.lower()
+    # Normalized text (anti-bypass)
+    normalized = normalize_text(text)
+
+    blacklist = [w.strip().lower() for w in blacklist_string.split(",") if w.strip()]
+
+    for word in blacklist:
+        # 1️⃣ Strict word match (safe)
+        pattern = r'\b' + re.escape(word) + r'\b'
+        if re.search(pattern, original):
+            return True
+        
+        # 2️⃣ Anti-bypass match (f*ck, f u c k, f.u.c.k)
+        if word in normalized.replace(" ", ""):
+            return True
+
+    return False
 
 @dp.channel_post()
 async def forward_from_source(message: types.Message):
     source_id = message.chat.id
 
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords FROM rules WHERE source_chat_id=%s AND is_active=1",
         (source_id,)
     )
     rows = cursor.fetchall()
@@ -667,14 +839,22 @@ async def forward_from_source(message: types.Message):
     #  detect message type ONCE
     msg_type = get_message_type(message)
 
-    for dest_string, filter_types in rows:
+    # detect message text/caption once
+    text_content = message.text or message.caption or ""
+
+    for dest_string, filter_types, blacklist_keywords in rows:
         allowed = filter_types.split(",")
 
-        #  skip if not allowed
+        # 1️⃣ FILTER CHECK (your existing system)
         if "all" not in allowed and msg_type not in allowed:
             continue
 
-        #  forward only if allowed
+        # 2️⃣ BLACKLIST CHECK (NEW SMART FEATURE)
+        if contains_blacklist(text_content, blacklist_keywords):
+            print(f"Blocked message due to blacklist: {text_content}")
+            continue  # Skip forwarding completely
+
+        # 3️⃣ FORWARD ONLY IF CLEAN
         for dest_id in dest_string.split(","):
             try:
                 await message.copy_to(int(dest_id))

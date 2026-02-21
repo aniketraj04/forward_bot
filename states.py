@@ -9,3 +9,5 @@ class EditRuleState(StatesGroup):
     ChoosingAction = State()
     RemovingDestination = State()
     AddingDestination = State()
+    AddingBlacklist = State()   
+    RemovingBlacklist = State()
