@@ -857,10 +857,61 @@ async def forward_from_source(message: types.Message):
         # 3️⃣ FORWARD ONLY IF CLEAN
         for dest_id in dest_string.split(","):
             try:
-                await message.copy_to(int(dest_id))
+                sent_msg = await message.copy_to(int(dest_id))
+
+                cursor.execute(
+                    """INSERT INTO message_map
+                    (source_chat_id, source_message_id, destination_chat_id, destination_message_id)
+                    VALUES (%s,%s,%s,%s)""",
+                    (
+                        message.chat.id,
+                        message.message_id,
+                        int(dest_id),
+                        sent_msg.message_id
+                    )
+                )
+
             except:
                 pass
 
+@dp.edited_channel_post()
+async def handle_edit(message: types.Message):
+
+    source_chat = message.chat.id
+    source_msg = message.message_id
+
+    cursor.execute(
+        """SELECT destination_chat_id, destination_message_id
+           FROM message_map
+           WHERE source_chat_id=%s AND source_message_id=%s""",
+        (source_chat, source_msg)
+    )
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        return
+
+    new_text = message.text or message.caption
+
+    for dest_chat, dest_msg in rows:
+        try:
+            if message.text:
+                await bot.edit_message_text(
+                    chat_id=dest_chat,
+                    message_id=dest_msg,
+                    text=new_text
+                )
+
+            elif message.caption:
+                await bot.edit_message_caption(
+                    chat_id=dest_chat,
+                    message_id=dest_msg,
+                    caption=new_text
+                )
+
+        except:
+            pass
 
 @dp.message()
 async def any_message(message: types.Message):
