@@ -896,18 +896,28 @@ async def handle_edit(message: types.Message):
 
     for dest_chat, dest_msg in rows:
         try:
-            if message.text:
-                await bot.edit_message_text(
-                    chat_id=dest_chat,
-                    message_id=dest_msg,
-                    text=new_text
-                )
 
-            elif message.caption:
-                await bot.edit_message_caption(
+            # CASE 1: Message edited normally
+            if new_text:
+                if message.text:
+                    await bot.edit_message_text(
+                        chat_id=dest_chat,
+                        message_id=dest_msg,
+                        text=new_text
+                    )
+
+                elif message.caption:
+                    await bot.edit_message_caption(
+                        chat_id=dest_chat,
+                        message_id=dest_msg,
+                        caption=new_text
+                    )
+
+            # CASE 2: Text removed → treat as delete
+            else:
+                await bot.delete_message(
                     chat_id=dest_chat,
-                    message_id=dest_msg,
-                    caption=new_text
+                    message_id=dest_msg
                 )
 
         except:
