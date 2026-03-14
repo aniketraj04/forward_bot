@@ -7,7 +7,7 @@ import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from states import RuleState, EditRuleState
+from states import RuleState, EditRuleState, DelayState
 from aiogram.fsm.context import FSMContext
 
 
@@ -138,6 +138,7 @@ def edit_menu_keyboard():
         [InlineKeyboardButton(text="➖ Remove Destination",  callback_data="edit_remove")],
         [InlineKeyboardButton(text="🎛 Message Filters",    callback_data="edit_filters")],
         [InlineKeyboardButton(text="🚫 Blacklist Words",    callback_data="edit_blacklist")],
+        [InlineKeyboardButton(text="⏱ Set Delay",          callback_data="edit_delay")],
         [
             InlineKeyboardButton(text="💾 Save & Exit", callback_data="edit_done"),
             InlineKeyboardButton(text="✖️ Cancel",       callback_data="edit_cancel"),
@@ -182,14 +183,16 @@ def help_keyboard():
 #   UI TEXT BUILDERS
 # ════════════════════════════════════════════════
 
-def rule_card_text(src_name, dst_names, is_active, rule_index):
+def rule_card_text(src_name, dst_names, is_active, rule_index, delay_seconds=0):
     status = "🟢 Active" if is_active else "⏸ Paused"
     dests = "\n".join(f"   └─ 📤 {d}" for d in dst_names)
+    delay_line = f"\n⏱ *Delay:* {delay_seconds}s" if delay_seconds and delay_seconds > 0 else "\n⏱ *Delay:* None"
     return (
         f"*Rule #{rule_index}*  •  {status}\n"
         f"━━━━━━━━━━━━━━━━━\n"
         f"📥 *From:* {src_name}\n"
         f"{dests}"
+        f"{delay_line}"
     )
 
 
@@ -269,7 +272,7 @@ def save_user(user_id, first_name, username):
 
 def get_user_rules(user_id):
     cursor.execute(
-        "SELECT id, source_chat_id, destination_chat_ids, is_active FROM rules WHERE user_id=%s",
+        "SELECT id, source_chat_id, destination_chat_ids, is_active, delay_seconds FROM rules WHERE user_id=%s",
         (user_id,)
     )
     return cursor.fetchall()
@@ -361,12 +364,12 @@ async def show_rules(call: types.CallbackQuery):
         parse_mode="Markdown"
     )
 
-    for i, (rid, src_id, dst_string, is_active) in enumerate(rules, 1):
+    for i, (rid, src_id, dst_string, is_active, delay_seconds) in enumerate(rules, 1):
         src_name = await get_chat_name(int(src_id))
         dst_names = [await get_chat_name(int(d)) for d in dst_string.split(",")]
 
         await call.message.answer(
-            rule_card_text(src_name, dst_names, is_active, i),
+            rule_card_text(src_name, dst_names, is_active, i, delay_seconds or 0),
             reply_markup=rule_action_keyboard(rid, is_active),
             parse_mode="Markdown"
         )
@@ -412,7 +415,7 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     rule_id = int(call.data.split("_")[1])
 
     cursor.execute(
-        "SELECT source_chat_id, destination_chat_ids, filter_types, blacklist_keywords FROM rules WHERE id=%s AND user_id=%s",
+        "SELECT source_chat_id, destination_chat_ids, filter_types, blacklist_keywords, delay_seconds FROM rules WHERE id=%s AND user_id=%s",
         (rule_id, call.from_user.id)
     )
     row = cursor.fetchone()
@@ -421,7 +424,7 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
         await call.answer("Rule not found", show_alert=True)
         return
 
-    src_id, dst_ids, filter_types, _ = row
+    src_id, dst_ids, filter_types, _, delay_seconds = row
 
     saved_filters = filter_types.split(",") if filter_types else ["all"]
     filter_dict = {
@@ -437,7 +440,8 @@ async def edit_rule(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(
         rule_id=rule_id,
         destinations=dst_ids.split(","),
-        filters=filter_dict
+        filters=filter_dict,
+        delay_seconds=delay_seconds or 0
     )
 
     src_name = await get_chat_name(int(src_id))
@@ -519,10 +523,11 @@ async def edit_done(call: types.CallbackQuery, state: FSMContext):
     enabled = [k for k, v in filters.items() if v == 1]
     filter_string = ",".join(enabled)
     dest_string = ",".join(destinations)
+    delay_seconds = data.get("delay_seconds", 0)
 
     cursor.execute(
-        "UPDATE rules SET destination_chat_ids=%s, filter_types=%s WHERE id=%s AND user_id=%s",
-        (dest_string, filter_string, rule_id, call.from_user.id)
+        "UPDATE rules SET destination_chat_ids=%s, filter_types=%s, delay_seconds=%s WHERE id=%s AND user_id=%s",
+        (dest_string, filter_string, delay_seconds, rule_id, call.from_user.id)
     )
     db.commit()
 
@@ -767,6 +772,93 @@ async def blacklist_back(call: types.CallbackQuery, state: FSMContext):
 
 
 # ════════════════════════════════════════════════
+#   DELAY
+# ════════════════════════════════════════════════
+
+# State filter ensures this fires BEFORE the catch-all @dp.callback_query()
+@dp.callback_query(EditRuleState.ChoosingAction, lambda c: c.data == "edit_delay")
+async def edit_delay(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    current_delay = data.get("delay_seconds", 0)
+
+    await state.set_state(DelayState.WaitingDelay)
+
+    await call.message.edit_text(
+        "⏱ *Set Forwarding Delay*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        f"Current delay: *{current_delay} seconds*\n\n"
+        "Send the number of seconds to wait\n"
+        "before forwarding each message.\n\n"
+        "Examples:\n"
+        "  `0` — forward instantly _(no delay)_\n"
+        "  `30` — wait 30 seconds\n"
+        "  `300` — wait 5 minutes\n"
+        "  `3600` — wait 1 hour\n\n"
+        "⚠️ _Max allowed: 86400 seconds (24 hours)_",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✖️ Cancel", callback_data="delay_cancel")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(DelayState.WaitingDelay)
+async def receive_delay(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+
+    if not text.isdigit():
+        await message.answer(
+            "❌ Please send a valid number.\n"
+            "Example: `60` for 60 seconds.",
+            parse_mode="Markdown"
+        )
+        return
+
+    seconds = int(text)
+
+    if seconds > 86400:
+        await message.answer(
+            "❌ Maximum allowed delay is *86400 seconds* (24 hours).\n"
+            "Please enter a smaller value.",
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(delay_seconds=seconds)
+    await state.set_state(EditRuleState.ChoosingAction)
+
+    data = await state.get_data()
+    rule_id = data.get("rule_id")
+
+    cursor.execute(
+        "SELECT source_chat_id FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, message.from_user.id)
+    )
+    row = cursor.fetchone()
+    src_name = await get_chat_name(int(row[0])) if row else "Unknown"
+
+    if seconds == 0:
+        delay_msg = "✅ *Delay removed.* Messages will forward instantly."
+    elif seconds < 60:
+        delay_msg = f"✅ *Delay set to {seconds} seconds.*"
+    elif seconds < 3600:
+        mins = seconds // 60
+        secs = seconds % 60
+        delay_msg = f"✅ *Delay set to {mins}m {secs}s.*" if secs else f"✅ *Delay set to {mins} minutes.*"
+    else:
+        hours = seconds // 3600
+        mins = (seconds % 3600) // 60
+        delay_msg = f"✅ *Delay set to {hours}h {mins}m.*" if mins else f"✅ *Delay set to {hours} hours.*"
+
+    await message.answer(
+        f"{delay_msg}\n\n" + edit_menu_text(src_name),
+        reply_markup=edit_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+
+# ════════════════════════════════════════════════
 #   SETUP FLOW (New Rule)
 # ════════════════════════════════════════════════
 
@@ -904,6 +996,27 @@ async def get_destination(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Please forward a post from a channel.")
 
 
+@dp.callback_query(DelayState.WaitingDelay, lambda c: c.data == "delay_cancel")
+async def delay_cancel(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(EditRuleState.ChoosingAction)
+    data = await state.get_data()
+    rule_id = data.get("rule_id")
+
+    cursor.execute(
+        "SELECT source_chat_id FROM rules WHERE id=%s AND user_id=%s",
+        (rule_id, call.from_user.id)
+    )
+    row = cursor.fetchone()
+    src_name = await get_chat_name(int(row[0])) if row else "Unknown"
+
+    await call.message.edit_text(
+        edit_menu_text(src_name),
+        reply_markup=edit_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
 # ════════════════════════════════════════════════
 #   FORWARDING ENGINE
 # ════════════════════════════════════════════════
@@ -954,7 +1067,7 @@ async def forward_from_source(message: types.Message):
     source_id = message.chat.id
 
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types, blacklist_keywords FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords, delay_seconds FROM rules WHERE source_chat_id=%s AND is_active=1",
         (source_id,)
     )
     rows = cursor.fetchall()
@@ -962,7 +1075,7 @@ async def forward_from_source(message: types.Message):
     msg_type     = get_message_type(message)
     text_content = message.text or message.caption or ""
 
-    for dest_string, filter_types, blacklist_keywords in rows:
+    for dest_string, filter_types, blacklist_keywords, delay_seconds in rows:
         allowed = filter_types.split(",")
 
         if "all" not in allowed and msg_type not in allowed:
@@ -971,6 +1084,10 @@ async def forward_from_source(message: types.Message):
         if contains_blacklist(text_content, blacklist_keywords):
             print(f"Blocked message due to blacklist: {text_content[:50]}")
             continue
+
+        # Wait if delay is set
+        if delay_seconds and delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
 
         for dest_id in dest_string.split(","):
             try:
