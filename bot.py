@@ -7,7 +7,7 @@ import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from states import RuleState, EditRuleState, DelayState
+from states import RuleState, EditRuleState, DelayState, WhitelistState
 from aiogram.fsm.context import FSMContext
 
 
@@ -56,6 +56,7 @@ HELP_TEXT = (
     "3️⃣  I'll forward every new message automatically\n\n"
     "🎛 *Filters* — only forward certain message types\n"
     "🚫 *Blacklist* — block messages with certain keywords\n"
+    "✅ *Whitelist* — only forward if a keyword is present\n"
     "⏱ *Delay* — wait N seconds before forwarding\n"
     "⏸ *Pause* — stop a rule without deleting it\n"
     "✏️ *Edit* — change destinations anytime\n\n"
@@ -121,9 +122,9 @@ def rules_list_keyboard(rules_data):
     for i, (rid, src_name, dst_names, is_active, delay_seconds) in enumerate(rules_data, 1):
         toggle_label = "⏸ Pause" if is_active else "▶️ Resume"
         kb.append([
-            InlineKeyboardButton(text=f"✏️ Edit {i}",    callback_data=f"edit_{rid}"),
+            InlineKeyboardButton(text=f"✏️ #{i}",    callback_data=f"edit_{rid}"),
             InlineKeyboardButton(text=toggle_label,   callback_data=f"toggle_{rid}"),
-            InlineKeyboardButton(text=f"🗑 Delet {i}",     callback_data=f"del_{rid}"),
+            InlineKeyboardButton(text=f"🗑 #{i}",     callback_data=f"del_{rid}"),
         ])
     kb.append([InlineKeyboardButton(text="⚡ New Rule", callback_data="set_rules")])
     kb.append([InlineKeyboardButton(text="🏠 Home",     callback_data="home")])
@@ -144,6 +145,7 @@ def edit_menu_keyboard():
         [InlineKeyboardButton(text="➖ Remove Destination", callback_data="edit_remove")],
         [InlineKeyboardButton(text="🎛 Message Filters",   callback_data="edit_filters")],
         [InlineKeyboardButton(text="🚫 Blacklist Words",   callback_data="edit_blacklist")],
+        [InlineKeyboardButton(text="✅ Whitelist Words",   callback_data="edit_whitelist")],
         [InlineKeyboardButton(text="⏱ Set Delay",         callback_data="edit_delay")],
         [
             InlineKeyboardButton(text="💾 Save & Back", callback_data="edit_done"),
@@ -178,6 +180,14 @@ def blacklist_keyboard():
     ])
 
 
+def whitelist_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add Keywords",    callback_data="wl_add")],
+        [InlineKeyboardButton(text="➖ Remove Keywords", callback_data="wl_remove")],
+        [InlineKeyboardButton(text="⬅️ Back",            callback_data="wl_back")],
+    ])
+
+
 def edit_menu_text(src_name):
     return (
         "✏️ *Editing Rule*\n"
@@ -198,6 +208,22 @@ def blacklist_text(keywords):
         "━━━━━━━━━━━━━━━━━\n\n"
         "Messages containing these words\n"
         "will *not* be forwarded:\n\n"
+        f"{kw_display}"
+    )
+
+
+def whitelist_text(keywords):
+    kw_display = (
+        "\n".join(f"  • `{k.strip()}`" for k in keywords.split(",") if k.strip())
+        if keywords and keywords.strip()
+        else "  _No keywords yet — all messages pass through_"
+    )
+    return (
+        "✅ *Whitelist Keywords*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Messages will *only* be forwarded\n"
+        "if they contain at least one of these words.\n\n"
+        "_Leave empty to forward everything._\n\n"
         f"{kw_display}"
     )
 
@@ -747,6 +773,94 @@ async def blacklist_back(call: types.CallbackQuery, state: FSMContext):
 
 
 # ════════════════════════════════════════════════
+#   WHITELIST
+# ════════════════════════════════════════════════
+
+@dp.callback_query(lambda c: c.data == "edit_whitelist")
+async def edit_whitelist(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("SELECT whitelist_keywords FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row     = cursor.fetchone()
+    current = row[0] if row and row[0] else ""
+    await call.message.edit_text(whitelist_text(current), reply_markup=whitelist_keyboard(), parse_mode="Markdown")
+    await call.answer()
+
+
+@dp.callback_query(lambda c: c.data == "wl_add")
+async def whitelist_add_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(WhitelistState.AddingWhitelist)
+    await call.message.edit_text(
+        "➕ *Add Whitelist Keywords*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Send keywords separated by commas.\n"
+        "Messages will *only* be forwarded if they\n"
+        "contain at least one of these words.\n\n"
+        "Example: `buy, sale, discount, offer`",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="edit_whitelist")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(WhitelistState.AddingWhitelist)
+async def add_whitelist_keywords(message: types.Message, state: FSMContext):
+    data      = await state.get_data()
+    rule_id   = data["rule_id"]
+    new_words = [w.strip().lower() for w in message.text.split(",") if w.strip()]
+    cursor.execute("SELECT whitelist_keywords FROM rules WHERE id=%s AND user_id=%s", (rule_id, message.from_user.id))
+    row      = cursor.fetchone()
+    existing = row[0].split(",") if row and row[0] else []
+    updated  = list(set(existing + new_words))
+    cursor.execute("UPDATE rules SET whitelist_keywords=%s WHERE id=%s AND user_id=%s", (",".join(updated), rule_id, message.from_user.id))
+    db.commit()
+    await edit_to_edit_menu(message, message.from_user.id, rule_id, state)
+
+
+@dp.callback_query(lambda c: c.data == "wl_remove")
+async def whitelist_remove_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(WhitelistState.RemovingWhitelist)
+    await call.message.edit_text(
+        "➖ *Remove Whitelist Keywords*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Send keywords to remove, separated by commas.\n\n"
+        "Example: `sale, offer`",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="edit_whitelist")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(WhitelistState.RemovingWhitelist)
+async def remove_whitelist_keywords(message: types.Message, state: FSMContext):
+    data         = await state.get_data()
+    rule_id      = data["rule_id"]
+    remove_words = [w.strip().lower() for w in message.text.split(",") if w.strip()]
+    cursor.execute("SELECT whitelist_keywords FROM rules WHERE id=%s AND user_id=%s", (rule_id, message.from_user.id))
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        await message.answer("⚠️ No whitelist keywords found.")
+        return
+    existing = row[0].split(",")
+    updated  = [w for w in existing if w not in remove_words]
+    cursor.execute("UPDATE rules SET whitelist_keywords=%s WHERE id=%s AND user_id=%s", (",".join(updated), rule_id, message.from_user.id))
+    db.commit()
+    await edit_to_edit_menu(message, message.from_user.id, rule_id, state)
+
+
+@dp.callback_query(lambda c: c.data == "wl_back")
+async def whitelist_back(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data.get("rule_id")
+    await edit_to_edit_menu(call, call.from_user.id, rule_id, state)
+    await call.answer()
+
+
+# ════════════════════════════════════════════════
 #   DELAY
 # ════════════════════════════════════════════════
 
@@ -848,20 +962,38 @@ def contains_blacklist(text: str, blacklist_string: str) -> bool:
     return False
 
 
+def contains_whitelist(text: str, whitelist_string: str) -> bool:
+    """Returns True if text contains AT LEAST ONE whitelisted word."""
+    if not text or not whitelist_string:
+        return False
+    original   = text.lower()
+    normalized = normalize_text(text)
+    for word in [w.strip().lower() for w in whitelist_string.split(",") if w.strip()]:
+        if re.search(r'\b' + re.escape(word) + r'\b', original):
+            return True
+        if word in normalized.replace(" ", ""):
+            return True
+    return False
+
+
 @dp.channel_post()
 async def forward_from_source(message: types.Message):
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types, blacklist_keywords, delay_seconds FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds FROM rules WHERE source_chat_id=%s AND is_active=1",
         (message.chat.id,)
     )
     msg_type     = get_message_type(message)
     text_content = message.text or message.caption or ""
-    for dest_string, filter_types, blacklist_keywords, delay_seconds in cursor.fetchall():
+    for dest_string, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds in cursor.fetchall():
         allowed = filter_types.split(",")
         if "all" not in allowed and msg_type not in allowed:
             continue
         if contains_blacklist(text_content, blacklist_keywords):
             continue
+        # Whitelist: if set, message MUST contain at least one whitelisted word
+        if whitelist_keywords and whitelist_keywords.strip():
+            if not contains_whitelist(text_content, whitelist_keywords):
+                continue
         if delay_seconds and delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
         for dest_id in dest_string.split(","):

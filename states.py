@@ -16,3 +16,8 @@ class EditRuleState(StatesGroup):
 
 class DelayState(StatesGroup):
     WaitingDelay = State()
+
+
+class WhitelistState(StatesGroup):
+    AddingWhitelist   = State()
+    RemovingWhitelist = State()
