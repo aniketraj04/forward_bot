@@ -21,3 +21,7 @@ class DelayState(StatesGroup):
 class WhitelistState(StatesGroup):
     AddingWhitelist   = State()
     RemovingWhitelist = State()
+
+
+class ReplaceState(StatesGroup):
+    WaitingPair = State()

@@ -1,13 +1,14 @@
 import asyncio
 import os
 import re
+import json
 from dotenv import load_dotenv
 load_dotenv()
 import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from states import RuleState, EditRuleState, DelayState, WhitelistState
+from states import RuleState, EditRuleState, DelayState, WhitelistState, ReplaceState
 from aiogram.fsm.context import FSMContext
 
 
@@ -57,6 +58,7 @@ HELP_TEXT = (
     "🎛 *Filters* — only forward certain message types\n"
     "🚫 *Blacklist* — block messages with certain keywords\n"
     "✅ *Whitelist* — only forward if a keyword is present\n"
+    "🔄 *Replace* — swap words before forwarding\n"
     "⏱ *Delay* — wait N seconds before forwarding\n"
     "⏸ *Pause* — stop a rule without deleting it\n"
     "✏️ *Edit* — change destinations anytime\n\n"
@@ -146,6 +148,7 @@ def edit_menu_keyboard():
         [InlineKeyboardButton(text="🎛 Message Filters",   callback_data="edit_filters")],
         [InlineKeyboardButton(text="🚫 Blacklist Words",   callback_data="edit_blacklist")],
         [InlineKeyboardButton(text="✅ Whitelist Words",   callback_data="edit_whitelist")],
+        [InlineKeyboardButton(text="🔄 Replace Words",     callback_data="edit_replace")],
         [InlineKeyboardButton(text="⏱ Set Delay",         callback_data="edit_delay")],
         [
             InlineKeyboardButton(text="💾 Save & Back", callback_data="edit_done"),
@@ -188,6 +191,25 @@ def whitelist_keyboard():
     ])
 
 
+def replace_keyboard(pairs: dict):
+    """Shows each from→to pair with a delete button, plus Add and Back."""
+    kb = []
+    for frm, to in pairs.items():
+        kb.append([
+            InlineKeyboardButton(
+                text=f"🔄 {frm} → {to}",
+                callback_data="rp_noop"
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"rp_del_{frm}"
+            ),
+        ])
+    kb.append([InlineKeyboardButton(text="➕ Add Pair",  callback_data="rp_add")])
+    kb.append([InlineKeyboardButton(text="⬅️ Back",      callback_data="rp_back")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
 def edit_menu_text(src_name):
     return (
         "✏️ *Editing Rule*\n"
@@ -225,6 +247,22 @@ def whitelist_text(keywords):
         "if they contain at least one of these words.\n\n"
         "_Leave empty to forward everything._\n\n"
         f"{kw_display}"
+    )
+
+
+def replace_text(pairs: dict):
+    if pairs:
+        pair_lines = "\n".join(f"  `{frm}` → `{to}`" for frm, to in pairs.items())
+    else:
+        pair_lines = "  _No replacements yet_"
+    return (
+        "🔄 *Word Replacements*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Before forwarding, these words will\n"
+        "be swapped in the message text.\n\n"
+        f"{pair_lines}\n\n"
+        "Tap *➕ Add Pair* to add a new one.\n"
+        "Tap 🗑 next to a pair to delete it."
     )
 
 
@@ -282,6 +320,38 @@ async def edit_to_edit_menu(call_or_message, user_id, rule_id, state):
         await call_or_message.answer(edit_menu_text(src_name), reply_markup=edit_menu_keyboard(), parse_mode="Markdown")
 
 
+def load_replace_pairs(raw: str) -> dict:
+    """Load JSON replace pairs from DB string, return {} on failure."""
+    if not raw or not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except:
+        return {}
+
+
+def save_replace_pairs(pairs: dict) -> str:
+    return json.dumps(pairs, ensure_ascii=False)
+
+
+async def render_replace_screen(call: types.CallbackQuery, pairs: dict):
+    await call.message.edit_text(
+        replace_text(pairs),
+        reply_markup=replace_keyboard(pairs),
+        parse_mode="Markdown"
+    )
+
+
+def apply_replacements(text: str, pairs: dict) -> str:
+    """Case-insensitive whole-word replacement, preserving original case structure."""
+    if not text or not pairs:
+        return text
+    for frm, to in pairs.items():
+        pattern = re.compile(r'\b' + re.escape(frm) + r'\b', re.IGNORECASE)
+        text = pattern.sub(to, text)
+    return text
+
+
 def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
     return cursor.fetchone()
@@ -312,7 +382,7 @@ def save_rule(user_id, source_id, destination_ids_str):
 
 
 # ════════════════════════════════════════════════
-#   /start  ← only place a NEW message is sent
+#   /start
 # ════════════════════════════════════════════════
 
 @dp.message(Command("start"))
@@ -861,6 +931,124 @@ async def whitelist_back(call: types.CallbackQuery, state: FSMContext):
 
 
 # ════════════════════════════════════════════════
+#   REPLACE WORDS
+# ════════════════════════════════════════════════
+
+@dp.callback_query(lambda c: c.data == "edit_replace")
+async def edit_replace(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("SELECT replace_pairs FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row   = cursor.fetchone()
+    pairs = load_replace_pairs(row[0] if row else "")
+    await render_replace_screen(call, pairs)
+    await call.answer()
+
+
+@dp.callback_query(lambda c: c.data == "rp_add")
+async def replace_add_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(ReplaceState.WaitingPair)
+    await call.message.edit_text(
+        "🔄 *Add Word Replacement*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Send the pair in this format:\n\n"
+        "`old word → new word`\n\n"
+        "Examples:\n"
+        "  `cat → dog`\n"
+        "  `hello → hi`\n"
+        "  `@oldchannel → @newchannel`\n\n"
+        "Use the arrow symbol `→` or just `->` between the words.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="edit_replace")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(ReplaceState.WaitingPair)
+async def receive_replace_pair(message: types.Message, state: FSMContext):
+    text = message.text.strip() if message.text else ""
+
+    # Accept both → and ->
+    if "→" in text:
+        parts = text.split("→", 1)
+    elif "->" in text:
+        parts = text.split("->", 1)
+    else:
+        await message.answer(
+            "❌ Wrong format. Use:\n`cat → dog`  or  `cat -> dog`",
+            parse_mode="Markdown"
+        )
+        return
+
+    frm = parts[0].strip()
+    to  = parts[1].strip()
+
+    if not frm or not to:
+        await message.answer("❌ Both words must be non-empty.\nExample: `cat → dog`", parse_mode="Markdown")
+        return
+
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+
+    cursor.execute("SELECT replace_pairs FROM rules WHERE id=%s AND user_id=%s", (rule_id, message.from_user.id))
+    row   = cursor.fetchone()
+    pairs = load_replace_pairs(row[0] if row else "")
+
+    pairs[frm] = to
+
+    cursor.execute(
+        "UPDATE rules SET replace_pairs=%s WHERE id=%s AND user_id=%s",
+        (save_replace_pairs(pairs), rule_id, message.from_user.id)
+    )
+    db.commit()
+
+    await state.set_state(EditRuleState.ChoosingAction)
+    await message.answer(
+        f"✅ Replacement added: `{frm}` → `{to}`",
+        parse_mode="Markdown"
+    )
+    # Show updated replace screen via a fake call — use answer + edit_menu fallback
+    await edit_to_edit_menu(message, message.from_user.id, rule_id, state)
+
+
+@dp.callback_query(lambda c: c.data.startswith("rp_del_"))
+async def replace_delete_pair(call: types.CallbackQuery, state: FSMContext):
+    frm     = call.data[7:]  # everything after "rp_del_"
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+
+    cursor.execute("SELECT replace_pairs FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row   = cursor.fetchone()
+    pairs = load_replace_pairs(row[0] if row else "")
+
+    if frm in pairs:
+        del pairs[frm]
+        cursor.execute(
+            "UPDATE rules SET replace_pairs=%s WHERE id=%s AND user_id=%s",
+            (save_replace_pairs(pairs), rule_id, call.from_user.id)
+        )
+        db.commit()
+
+    await render_replace_screen(call, pairs)
+    await call.answer(f"🗑 Removed `{frm}`")
+
+
+@dp.callback_query(lambda c: c.data == "rp_noop")
+async def replace_noop(call: types.CallbackQuery):
+    await call.answer()
+
+
+@dp.callback_query(lambda c: c.data == "rp_back")
+async def replace_back(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data.get("rule_id")
+    await edit_to_edit_menu(call, call.from_user.id, rule_id, state)
+    await call.answer()
+
+
+# ════════════════════════════════════════════════
 #   DELAY
 # ════════════════════════════════════════════════
 
@@ -963,7 +1151,6 @@ def contains_blacklist(text: str, blacklist_string: str) -> bool:
 
 
 def contains_whitelist(text: str, whitelist_string: str) -> bool:
-    """Returns True if text contains AT LEAST ONE whitelisted word."""
     if not text or not whitelist_string:
         return False
     original   = text.lower()
@@ -976,29 +1163,53 @@ def contains_whitelist(text: str, whitelist_string: str) -> bool:
     return False
 
 
+def apply_replacements(text: str, pairs: dict) -> str:
+    """Case-insensitive whole-word replacement."""
+    if not text or not pairs:
+        return text
+    for frm, to in pairs.items():
+        pattern = re.compile(r'\b' + re.escape(frm) + r'\b', re.IGNORECASE)
+        text = pattern.sub(to, text)
+    return text
+
+
 @dp.channel_post()
 async def forward_from_source(message: types.Message):
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs FROM rules WHERE source_chat_id=%s AND is_active=1",
         (message.chat.id,)
     )
     msg_type     = get_message_type(message)
     text_content = message.text or message.caption or ""
-    for dest_string, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds in cursor.fetchall():
+
+    for dest_string, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs_raw in cursor.fetchall():
         allowed = filter_types.split(",")
         if "all" not in allowed and msg_type not in allowed:
             continue
         if contains_blacklist(text_content, blacklist_keywords):
             continue
-        # Whitelist: if set, message MUST contain at least one whitelisted word
         if whitelist_keywords and whitelist_keywords.strip():
             if not contains_whitelist(text_content, whitelist_keywords):
                 continue
+
+        # Apply word replacements
+        pairs        = load_replace_pairs(replace_pairs_raw)
+        new_text     = apply_replacements(message.text, pairs)     if message.text    else None
+        new_caption  = apply_replacements(message.caption, pairs)  if message.caption else None
+
         if delay_seconds and delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
+
         for dest_id in dest_string.split(","):
             try:
-                sent = await message.copy_to(int(dest_id))
+                # If text was changed, send as new message instead of copy
+                if new_text and new_text != message.text:
+                    sent = await bot.send_message(int(dest_id), new_text)
+                elif new_caption and new_caption != message.caption:
+                    sent = await message.copy_to(int(dest_id), caption=new_caption)
+                else:
+                    sent = await message.copy_to(int(dest_id))
+
                 cursor.execute(
                     "INSERT INTO message_map (source_chat_id, source_message_id, destination_chat_id, destination_message_id) VALUES (%s,%s,%s,%s)",
                     (message.chat.id, message.message_id, int(dest_id), sent.message_id)
@@ -1016,14 +1227,24 @@ async def handle_edit(message: types.Message):
     rows = cursor.fetchall()
     if not rows:
         return
-    new_text = message.text or message.caption
+
+    # Also fetch replace pairs to apply on edits
+    cursor.execute(
+        "SELECT replace_pairs FROM rules WHERE source_chat_id=%s AND is_active=1",
+        (message.chat.id,)
+    )
+    rp_row = cursor.fetchone()
+    pairs  = load_replace_pairs(rp_row[0] if rp_row else "")
+
+    new_text = apply_replacements(message.text, pairs)     if message.text    else None
+    new_cap  = apply_replacements(message.caption, pairs)  if message.caption else None
+
     for dest_chat, dest_msg in rows:
         try:
             if new_text:
-                if message.text:
-                    await bot.edit_message_text(chat_id=dest_chat, message_id=dest_msg, text=new_text)
-                else:
-                    await bot.edit_message_caption(chat_id=dest_chat, message_id=dest_msg, caption=new_text)
+                await bot.edit_message_text(chat_id=dest_chat, message_id=dest_msg, text=new_text)
+            elif new_cap:
+                await bot.edit_message_caption(chat_id=dest_chat, message_id=dest_msg, caption=new_cap)
             else:
                 await bot.delete_message(chat_id=dest_chat, message_id=dest_msg)
         except:
