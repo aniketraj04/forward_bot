@@ -8,7 +8,7 @@ import mysql.connector
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from states import RuleState, EditRuleState, DelayState, WhitelistState, ReplaceState
+from states import RuleState, EditRuleState, DelayState, WhitelistState, ReplaceState, HeaderFooterState
 from aiogram.fsm.context import FSMContext
 
 
@@ -59,6 +59,8 @@ HELP_TEXT = (
     "🚫 *Blacklist* — block messages with certain keywords\n"
     "✅ *Whitelist* — only forward if a keyword is present\n"
     "🔄 *Replace* — swap words before forwarding\n"
+    "🔝 *Header* — add a custom text above every message\n"
+    "🔚 *Footer* — add a custom text below every message\n"
     "⏱ *Delay* — wait N seconds before forwarding\n"
     "⏸ *Pause* — stop a rule without deleting it\n"
     "✏️ *Edit* — change destinations anytime\n\n"
@@ -149,6 +151,8 @@ def edit_menu_keyboard():
         [InlineKeyboardButton(text="🚫 Blacklist Words",   callback_data="edit_blacklist")],
         [InlineKeyboardButton(text="✅ Whitelist Words",   callback_data="edit_whitelist")],
         [InlineKeyboardButton(text="🔄 Replace Words",     callback_data="edit_replace")],
+        [InlineKeyboardButton(text="🔝 Set Header",        callback_data="edit_header")],
+        [InlineKeyboardButton(text="🔚 Set Footer",        callback_data="edit_footer")],
         [InlineKeyboardButton(text="⏱ Set Delay",         callback_data="edit_delay")],
         [
             InlineKeyboardButton(text="💾 Save & Back", callback_data="edit_done"),
@@ -264,6 +268,39 @@ def replace_text(pairs: dict):
         "Tap *➕ Add Pair* to add a new one.\n"
         "Tap 🗑 next to a pair to delete it."
     )
+
+
+def header_footer_text(header: str, footer: str) -> str:
+    h = f"`{header}`" if header and header.strip() else "_Not set_"
+    f_ = f"`{footer}`" if footer and footer.strip() else "_Not set_"
+    return (
+        "🔝🔚 *Header & Footer*\n"
+        "━━━━━━━━━━━━━━━━━\n\n"
+        "Every forwarded message will be wrapped\n"
+        "with your custom header and footer.\n\n"
+        f"🔝 *Header:*\n{h}\n\n"
+        f"🔚 *Footer:*\n{f_}\n\n"
+        "_Use_ /skip _to leave one empty._"
+    )
+
+
+def header_footer_keyboard(has_header: bool, has_footer: bool) -> InlineKeyboardMarkup:
+    kb = [
+        [InlineKeyboardButton(
+            text="🔝 Edit Header" if has_header else "🔝 Set Header",
+            callback_data="hf_set_header"
+        )],
+        [InlineKeyboardButton(
+            text="🔚 Edit Footer" if has_footer else "🔚 Set Footer",
+            callback_data="hf_set_footer"
+        )],
+    ]
+    if has_header:
+        kb.append([InlineKeyboardButton(text="🗑 Remove Header", callback_data="hf_del_header")])
+    if has_footer:
+        kb.append([InlineKeyboardButton(text="🗑 Remove Footer", callback_data="hf_del_footer")])
+    kb.append([InlineKeyboardButton(text="⬅️ Back", callback_data="hf_back")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 # ════════════════════════════════════════════════
@@ -1049,6 +1086,136 @@ async def replace_back(call: types.CallbackQuery, state: FSMContext):
 
 
 # ════════════════════════════════════════════════
+#   HEADER / FOOTER
+# ════════════════════════════════════════════════
+
+@dp.callback_query(lambda c: c.data in ("edit_header", "edit_footer"))
+async def edit_header_footer(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("SELECT header_text, footer_text FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row    = cursor.fetchone()
+    header = row[0] if row and row[0] else ""
+    footer = row[1] if row and row[1] else ""
+    await call.message.edit_text(
+        header_footer_text(header, footer),
+        reply_markup=header_footer_keyboard(bool(header), bool(footer)),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.callback_query(lambda c: c.data == "hf_set_header")
+async def set_header_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(HeaderFooterState.WaitingHeader)
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("SELECT header_text FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row     = cursor.fetchone()
+    current = f"\n\nCurrent: `{row[0]}`" if row and row[0] else ""
+    await call.message.edit_text(
+        f"🔝 *Set Header*\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"Send the text you want to appear\n"
+        f"*above* every forwarded message.{current}\n\n"
+        f"Example:\n`👋 Hello Members!`\n\n"
+        f"Send /skip to remove the header.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="edit_header")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(HeaderFooterState.WaitingHeader)
+async def receive_header(message: types.Message, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    text    = "" if message.text and message.text.strip() == "/skip" else (message.text or "").strip()
+    cursor.execute("UPDATE rules SET header_text=%s WHERE id=%s AND user_id=%s", (text, rule_id, message.from_user.id))
+    db.commit()
+    await edit_to_edit_menu(message, message.from_user.id, rule_id, state)
+
+
+@dp.callback_query(lambda c: c.data == "hf_set_footer")
+async def set_footer_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(HeaderFooterState.WaitingFooter)
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("SELECT footer_text FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row     = cursor.fetchone()
+    current = f"\n\nCurrent: `{row[0]}`" if row and row[0] else ""
+    await call.message.edit_text(
+        f"🔚 *Set Footer*\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"Send the text you want to appear\n"
+        f"*below* every forwarded message.{current}\n\n"
+        f"Example:\n`✅ Thank you for reading!`\n\n"
+        f"Send /skip to remove the footer.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="edit_footer")]
+        ]),
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+
+@dp.message(HeaderFooterState.WaitingFooter)
+async def receive_footer(message: types.Message, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    text    = "" if message.text and message.text.strip() == "/skip" else (message.text or "").strip()
+    cursor.execute("UPDATE rules SET footer_text=%s WHERE id=%s AND user_id=%s", (text, rule_id, message.from_user.id))
+    db.commit()
+    await edit_to_edit_menu(message, message.from_user.id, rule_id, state)
+
+
+@dp.callback_query(lambda c: c.data == "hf_del_header")
+async def delete_header(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("UPDATE rules SET header_text='' WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    db.commit()
+    cursor.execute("SELECT header_text, footer_text FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row    = cursor.fetchone()
+    header = row[0] if row and row[0] else ""
+    footer = row[1] if row and row[1] else ""
+    await call.message.edit_text(
+        header_footer_text(header, footer),
+        reply_markup=header_footer_keyboard(bool(header), bool(footer)),
+        parse_mode="Markdown"
+    )
+    await call.answer("🗑 Header removed")
+
+
+@dp.callback_query(lambda c: c.data == "hf_del_footer")
+async def delete_footer(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data["rule_id"]
+    cursor.execute("UPDATE rules SET footer_text='' WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    db.commit()
+    cursor.execute("SELECT header_text, footer_text FROM rules WHERE id=%s AND user_id=%s", (rule_id, call.from_user.id))
+    row    = cursor.fetchone()
+    header = row[0] if row and row[0] else ""
+    footer = row[1] if row and row[1] else ""
+    await call.message.edit_text(
+        header_footer_text(header, footer),
+        reply_markup=header_footer_keyboard(bool(header), bool(footer)),
+        parse_mode="Markdown"
+    )
+    await call.answer("🗑 Footer removed")
+
+
+@dp.callback_query(lambda c: c.data == "hf_back")
+async def hf_back(call: types.CallbackQuery, state: FSMContext):
+    data    = await state.get_data()
+    rule_id = data.get("rule_id")
+    await edit_to_edit_menu(call, call.from_user.id, rule_id, state)
+    await call.answer()
+
+
+# ════════════════════════════════════════════════
 #   DELAY
 # ════════════════════════════════════════════════
 
@@ -1173,16 +1340,27 @@ def apply_replacements(text: str, pairs: dict) -> str:
     return text
 
 
+def apply_header_footer(text: str, header: str, footer: str) -> str:
+    """Wrap text with header and/or footer."""
+    parts = []
+    if header and header.strip():
+        parts.append(header.strip())
+    parts.append(text)
+    if footer and footer.strip():
+        parts.append(footer.strip())
+    return "\n\n".join(parts)
+
+
 @dp.channel_post()
 async def forward_from_source(message: types.Message):
     cursor.execute(
-        "SELECT destination_chat_ids, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs FROM rules WHERE source_chat_id=%s AND is_active=1",
+        "SELECT destination_chat_ids, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs, header_text, footer_text FROM rules WHERE source_chat_id=%s AND is_active=1",
         (message.chat.id,)
     )
     msg_type     = get_message_type(message)
     text_content = message.text or message.caption or ""
 
-    for dest_string, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs_raw in cursor.fetchall():
+    for dest_string, filter_types, blacklist_keywords, whitelist_keywords, delay_seconds, replace_pairs_raw, header_text, footer_text in cursor.fetchall():
         allowed = filter_types.split(",")
         if "all" not in allowed and msg_type not in allowed:
             continue
@@ -1193,19 +1371,30 @@ async def forward_from_source(message: types.Message):
                 continue
 
         # Apply word replacements
-        pairs        = load_replace_pairs(replace_pairs_raw)
-        new_text     = apply_replacements(message.text, pairs)     if message.text    else None
-        new_caption  = apply_replacements(message.caption, pairs)  if message.caption else None
+        pairs       = load_replace_pairs(replace_pairs_raw)
+        new_text    = apply_replacements(message.text,    pairs) if message.text    else None
+        new_caption = apply_replacements(message.caption, pairs) if message.caption else None
+
+        # Apply header / footer
+        has_wrapper = (header_text and header_text.strip()) or (footer_text and footer_text.strip())
+        if has_wrapper:
+            if new_text:
+                new_text = apply_header_footer(new_text, header_text or "", footer_text or "")
+            elif new_caption:
+                new_caption = apply_header_footer(new_caption, header_text or "", footer_text or "")
+            elif message.text:
+                new_text = apply_header_footer(message.text, header_text or "", footer_text or "")
+            elif message.caption:
+                new_caption = apply_header_footer(message.caption, header_text or "", footer_text or "")
 
         if delay_seconds and delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
         for dest_id in dest_string.split(","):
             try:
-                # If text was changed, send as new message instead of copy
-                if new_text and new_text != message.text:
+                if new_text and new_text != (message.text or ""):
                     sent = await bot.send_message(int(dest_id), new_text)
-                elif new_caption and new_caption != message.caption:
+                elif new_caption and new_caption != (message.caption or ""):
                     sent = await message.copy_to(int(dest_id), caption=new_caption)
                 else:
                     sent = await message.copy_to(int(dest_id))

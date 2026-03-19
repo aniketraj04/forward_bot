@@ -25,3 +25,8 @@ class WhitelistState(StatesGroup):
 
 class ReplaceState(StatesGroup):
     WaitingPair = State()
+
+
+class HeaderFooterState(StatesGroup):
+    WaitingHeader = State()
+    WaitingFooter = State()
